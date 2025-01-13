@@ -64,8 +64,18 @@ This repository is work-in-progress and will continue to get updated and improve
 ```
 @InProceedings{saadatnejad2024socialtransmotion,
       title={Social-Transmotion: Promptable Human Trajectory Prediction}, 
-      author={Saeed Saadatnejad and Yang Gao and Kaouther Messaoud and Alexandre Alahi},
-      year={2024},
+      author={Saadatnejad, Saeed and Gao, Yang and Messaoud, Kaouther and Alahi, Alexandre},
       booktitle={International Conference on Learning Representations (ICLR)},
+      year={2024},
+}
+```
+
+Feel free to check the follow-up work, Multi-Transmotion, a pre-trained model for multimodal multitask human motion prediction.
+```
+@inproceedings{gao2024multi,
+    title={Multi-Transmotion: Pre-trained Model for Human Motion Prediction},
+    author={Gao, Yang and Luan, Po-Chien and Alahi, Alexandre},
+    booktitle={8th Annual Conference on Robot Learning},
+    year={2024}
 }
 ```
