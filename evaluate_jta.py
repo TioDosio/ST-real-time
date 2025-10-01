@@ -9,6 +9,79 @@ from dataset_jta import batch_process_coords, create_dataset, collate_batch
 from model_jta import create_model
 from utils.utils import create_logger
 
+def evaluate_real_time_data(model, config, input_joints, padding_mask, modality="traj+all"):
+    """
+    Evaluate real-time data using the loaded model
+    
+    Args:
+        model: Pre-loaded model
+        config: Model configuration
+        input_joints: Input trajectory data
+        padding_mask: Padding mask for the input
+        modality: Modality selection for evaluation
+    
+    Returns:
+        predictions: Model predictions
+    """
+    model.eval()
+    
+    with torch.no_grad():
+        # Move data to device
+        input_joints = input_joints.to(config["DEVICE"])
+        padding_mask = padding_mask.to(config["DEVICE"])
+        
+        # Get predictions
+        pred_joints = model(input_joints, padding_mask)
+        
+        # Get output length from config
+        out_F = config['TRAIN']['output_track_size']
+        output_joints = pred_joints[:, -out_F:]
+        
+        # Move back to CPU for processing
+        output_joints = output_joints.cpu()
+        
+    return output_joints
+
+
+def load_model_and_config(ckpt_path, logger):
+    """
+    Load model checkpoint and configuration
+    """
+    logger.info(f'Loading checkpoint from {ckpt_path}') 
+    ckpt = torch.load(ckpt_path, map_location=torch.device('cpu'))
+    config = ckpt['config']
+    
+    if torch.cuda.is_available():
+        config["DEVICE"] = f"cuda:{torch.cuda.current_device()}"
+        torch.cuda.manual_seed(0)
+    else:
+        config["DEVICE"] = "cpu"
+
+    logger.info("Initializing with config:")
+    logger.info(config)
+
+    # Initialize model
+    model = create_model(config, logger)
+    model.load_state_dict(ckpt['model'])
+    
+    return model, config
+
+def create_dataloader(config, logger, split="test"):
+    """
+    Create dataloader for evaluation
+    """
+    in_F, out_F = config['TRAIN']['input_track_size'], config['TRAIN']['output_track_size']
+    assert in_F == 9
+    assert out_F == 12
+
+    name = config['DATA']['train_datasets']
+    dataset = create_dataset(name[0], logger, split=split, track_size=(in_F+out_F), track_cutoff=in_F)
+    
+    bs = config['TRAIN']['batch_size']
+    dataloader = DataLoader(dataset, batch_size=bs, num_workers=config['TRAIN']['num_workers'], shuffle=False, collate_fn=collate_batch)
+    
+    return dataloader, bs
+
 def inference(model, config, input_joints, padding_mask, out_len=14):
     model.eval()
     
@@ -84,49 +157,16 @@ if __name__ == "__main__":
     np.random.seed(0)
     torch.manual_seed(0)
         
-    ################################
-    # Load checkpoint
-    ################################
-
     logger = create_logger('')
-    logger.info(f'Loading checkpoint from {args.ckpt}') 
-    ckpt = torch.load(args.ckpt, map_location = torch.device('cpu'))
-    config = ckpt['config']
     
-    if torch.cuda.is_available():
-        config["DEVICE"] = f"cuda:{torch.cuda.current_device()}"
-        torch.cuda.manual_seed(0)
-    else:
-        config["DEVICE"] = "cpu"
-
-
-    logger.info("Initializing with config:")
-    logger.info(config)
-
-    ################################
-    # Initialize model
-    ################################
-
-    model = create_model(config, logger)
-    model.load_state_dict(ckpt['model']) 
-    ################################
-    # Load data
-    ################################
-
-    in_F, out_F = config['TRAIN']['input_track_size'], config['TRAIN']['output_track_size']
-    assert in_F == 9
-    assert out_F == 12
-
-    name = config['DATA']['train_datasets']
+    # Load model and configuration
+    model, config = load_model_and_config(args.ckpt, logger)
     
-    dataset = create_dataset(name[0], logger, split=args.split, track_size=(in_F+out_F), track_cutoff=in_F)
-
+    # Create dataloader
+    dataloader, bs = create_dataloader(config, logger, split=args.split)
     
- 
-    bs = config['TRAIN']['batch_size']
-    dataloader = DataLoader(dataset, batch_size=bs, num_workers=config['TRAIN']['num_workers'], shuffle=False, collate_fn=collate_batch)
-    ade,fde = evaluate_ade_fde(model, args.modality, dataloader, bs, config, logger, return_all=True)
-
+    # Evaluate
+    ade, fde = evaluate_ade_fde(model, args.modality, dataloader, bs, config, logger, return_all=True)
 
     print('ADE: ', ade)
     print('FDE: ', fde)
