@@ -113,8 +113,7 @@ class RealTimeDataCollector:
                         print(f"Transformed predictions sample: {transformed_predictions[:2] if len(transformed_predictions) > 1 else transformed_predictions}")
                         
                         # Visualize trajectories with transformed coordinates
-                        #self.trajectory_evaluator.detailed_position_analysis(transformed_observations, ground_truth, transformed_predictions, self.local_frames, self.seq_len, self.interval)
-                        self.trajectory_evaluator.publish_trajectories_to_rviz(transformed_observations, ground_truth, transformed_predictions)
+                        self.trajectory_evaluator.publish_trajectories_to_rviz(observations, ground_truth, transformed_predictions)
                         
                         if self.debug:          
                             self.save_debug_data(X, predictions)
