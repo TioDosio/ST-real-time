@@ -9,6 +9,7 @@ from tf2_msgs.msg import TFMessage
 from view_predictions import TrajectoryEvaluator
 from evaluate_jta import load_model_and_config, evaluate_real_time_data
 from utils.utils import create_logger
+from move_vizzy import move_robot_to_coordinate
 
 class RealTimeDataCollector:
     def __init__(self, checkpoint_path="realeases/jta/checkpoint/checkpoint.pth.tar"):
@@ -20,6 +21,7 @@ class RealTimeDataCollector:
         self.seq_len = 10
         self.interval = 5  # detection frequency is 5Hz, so interval of 5 means 1 second
         self.debug = False
+        self.last_predictions = []
 
         # Set random seeds for reproducibility
         random.seed(0)
@@ -113,6 +115,7 @@ class RealTimeDataCollector:
                         print(f"Transformed predictions sample: {transformed_predictions[:2] if len(transformed_predictions) > 1 else transformed_predictions}")
                         
                         # Visualize trajectories with transformed coordinates
+                        move_robot_to_coordinate(self.last_predictions)
                         self.trajectory_evaluator.publish_trajectories_to_rviz(observations, ground_truth, transformed_predictions)
                         
                         if self.debug:          
