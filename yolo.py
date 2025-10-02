@@ -1,199 +1,189 @@
-#!/usr/bin/env python3
-
+import os
 import rospy
 import cv2
+import math
+from sensor_msgs.msg import CompressedImage
+from visualization_msgs.msg import Marker, MarkerArray
+from geometry_msgs.msg import Point
 import numpy as np
-from sensor_msgs.msg import Image, CompressedImage
 from ultralytics import YOLO
-import torch
 
-class YOLOv8PoseDetector:
+class PersonDetector:
     def __init__(self):
-        rospy.init_node('yolov8_pose_detector', anonymous=True)
-        
-        # Load YOLOv8 pose model
-        rospy.loginfo("Loading YOLOv8-pose model...")
-        self.model = YOLO('yolov8n-pose.pt')  # You can use yolov8s-pose.pt, yolov8m-pose.pt, etc.
-        rospy.loginfo("Model loaded successfully!")
-        
-        # Set device (GPU if available)
-        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        rospy.loginfo(f"Using device: {self.device}")
-        
-        # Publishers
-        self.image_pub = rospy.Publisher('/yolov8_pose/annotated_image', Image, queue_size=1)
-        self.compressed_pub = rospy.Publisher('/yolov8_pose/annotated_image/compressed', CompressedImage, queue_size=1)
-        
-        # Subscriber
-        self.image_sub = rospy.Subscriber('/vizzy/l_camera/suppressed_image_rect_color_sd/compressed', 
-                                         CompressedImage, self.image_callback, queue_size=1)
-        
-        # Parameters
-        self.confidence_threshold = rospy.get_param('~confidence_threshold', 0.5)
-        self.publish_compressed = rospy.get_param('~publish_compressed', True)
-        
-        rospy.loginfo("YOLOv8 Pose Detector initialized!")
-        rospy.loginfo("Subscribed to: /vizzy/l_camera/suppressed_image_rect_color_sd/compressed")
-        rospy.loginfo("Publishing to: /yolov8_pose/annotated_image")
-        
-    def image_callback(self, msg):
-        try:
-            # Convert compressed image to CV2 format
-            np_arr = np.frombuffer(msg.data, np.uint8)
-            cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
-            
-            if cv_image is None:
-                rospy.logerr("Failed to decode compressed image")
-                return
-            
-            # Run YOLOv8 pose detection
-            results = self.model(cv_image, device=self.device, conf=self.confidence_threshold)
-            
-            # Annotate image
-            annotated_image = self.annotate_image(cv_image, results[0])
-            
-            # Publish annotated image
-            self.publish_results(annotated_image, msg.header)
-            
-        except Exception as e:
-            rospy.logerr(f"Error in image callback: {str(e)}")
-    
-    def annotate_image(self, image, result):
-        """
-        Annotate image with bounding boxes and pose keypoints
-        """
-        annotated_img = image.copy()
-        
-        # Get boxes and keypoints
-        boxes = result.boxes
-        keypoints = result.keypoints
-        
-        if boxes is not None:
-            for i, box in enumerate(boxes):
-                # Get box coordinates and confidence
-                x1, y1, x2, y2 = box.xyxy[0].cpu().numpy().astype(int)
-                conf = box.conf[0].cpu().numpy()
-                cls = box.cls[0].cpu().numpy().astype(int)
-                
-                # Draw bounding box
-                cv2.rectangle(annotated_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                
-                # Add label
-                label = f"Person {conf:.2f}"
-                label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)[0]
-                cv2.rectangle(annotated_img, (x1, y1 - label_size[1] - 5), 
-                             (x1 + label_size[0], y1), (0, 255, 0), -1)
-                cv2.putText(annotated_img, label, (x1, y1 - 5), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
-        
-        # Draw keypoints if available
-        if keypoints is not None:
-            for keypoint_set in keypoints:
-                self.draw_keypoints(annotated_img, keypoint_set.xy[0].cpu().numpy(), 
-                                  keypoint_set.conf[0].cpu().numpy())
-        
-        return annotated_img
-    
-    def draw_keypoints(self, image, keypoints, confidences):
-        """
-        Draw pose keypoints and skeleton
-        """
-        # COCO pose keypoint connections
-        skeleton = [
-            [16, 14], [14, 12], [17, 15], [15, 13], [12, 13],
-            [6, 12], [7, 13], [6, 7], [6, 8], [7, 9],
-            [8, 10], [9, 11], [2, 3], [1, 2], [1, 3],
-            [2, 4], [3, 5], [4, 6], [5, 7]
-        ]
-        
-        # Colors for different keypoints
-        keypoint_colors = [
-            (255, 0, 0),    # nose
-            (255, 85, 0),   # eyes
-            (255, 170, 0),
-            (255, 255, 0),  # ears  
-            (170, 255, 0),
-            (85, 255, 0),   # shoulders
-            (0, 255, 0),
-            (0, 255, 85),   # elbows
-            (0, 255, 170),
-            (0, 255, 255),  # wrists
-            (0, 170, 255),
-            (0, 85, 255),   # hips
-            (0, 0, 255),
-            (85, 0, 255),   # knees
-            (170, 0, 255),
-            (255, 0, 255),  # ankles
-            (255, 0, 170)
-        ]
-        
-        # Draw keypoints
-        for i, (x, y) in enumerate(keypoints):
-            if confidences[i] > 0.5:  # Only draw confident keypoints
-                color = keypoint_colors[i] if i < len(keypoint_colors) else (255, 255, 255)
-                cv2.circle(image, (int(x), int(y)), 5, color, -1)
-                cv2.circle(image, (int(x), int(y)), 5, (0, 0, 0), 1)
-        
-        # Draw skeleton connections
-        for connection in skeleton:
-            kpt_a, kpt_b = connection
-            if (kpt_a-1 < len(keypoints) and kpt_b-1 < len(keypoints) and 
-                confidences[kpt_a-1] > 0.5 and confidences[kpt_b-1] > 0.5):
-                
-                x1, y1 = keypoints[kpt_a-1]
-                x2, y2 = keypoints[kpt_b-1]
-                cv2.line(image, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 255), 2)
-    
-    def cv2_to_imgmsg(self, cv_image, encoding="bgr8"):
-        """
-        Convert OpenCV image to ROS Image message without cv_bridge
-        """
-        img_msg = Image()
-        img_msg.height = cv_image.shape[0]
-        img_msg.width = cv_image.shape[1]
-        img_msg.encoding = encoding
-        img_msg.is_bigendian = 0
-        img_msg.step = cv_image.shape[1] * cv_image.shape[2]
-        img_msg.data = cv_image.tobytes()
-        return img_msg
-    
-    def publish_results(self, annotated_image, header):
-        """
-        Publish annotated image without using cv_bridge 
-        """
-        try:
-            # Convert to ROS Image message without cv_bridge
-            ros_image = self.cv2_to_imgmsg(annotated_image, "bgr8")
-            ros_image.header = header
-            ros_image.header.frame_id = "camera_frame"  # Adjust frame_id as needed
-            ros_image.header.stamp = rospy.Time.now()
-            
-            # Publish uncompressed image
-            self.image_pub.publish(ros_image)
-            
-            # Publish compressed image if enabled
-            if self.publish_compressed:
-                compressed_msg = CompressedImage()
-                compressed_msg.header = ros_image.header
-                compressed_msg.format = "jpeg"
-                
-                # Compress image
-                encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 90]
-                _, compressed_data = cv2.imencode('.jpg', annotated_image, encode_param)
-                compressed_msg.data = compressed_data.tobytes()
-                
-                self.compressed_pub.publish(compressed_msg)
-                
-        except Exception as e:
-            rospy.logerr(f"Error publishing results: {str(e)}")
 
-    def run(self):
-        rospy.loginfo("YOLOv8 Pose Detector running...")
+        # YOLO model initialization
+        yolo_model_path = os.path.join('yolo', 'yolov8m-pose.pt')
+        self.yolo_model = YOLO(yolo_model_path)
+        
+        # Camera intrinsic parameters
+        self.camera_matrix = np.array([[335.49106984455955, 0.0, 329.76315999999997],
+                                     [0.0, 376.1876816184971, 239.82100277456647],
+                                     [0.0, 0.0, 1.0]])
+        
+        # Camera pose parameters
+        self.camera_height = 1.3  # meters above ground
+        self.camera_tilt = 0.0    # radians
+
+        rospy.init_node('person_detector', anonymous=True)
+        
+        # Subscribers
+        self.camera_sub = rospy.Subscriber('/vizzy/l_camera/suppressed_image_rect_color_sd/compressed', CompressedImage, self.camera_callback)
+        
+        # Publisher for detected people coordinates and bounding boxes
+        self.people_pub = rospy.Publisher('/detected_people', MarkerArray, queue_size=10)
+
+
+    def get_ground_coordinates(self, bbox, keypoints, camera_matrix, camera_height, camera_tilt=0.0):
+        """
+        Get 3D ground coordinates (X, Z) for a detected person.
+        
+        Args:
+            bbox: (x1, y1, x2, y2) bounding box
+            keypoints: List of keypoints
+            camera_matrix: 3x3 camera intrinsic matrix
+            camera_height: Camera height above ground
+            camera_tilt: Camera tilt angle
+        
+        Returns:
+            (x, z) coordinates on ground plane in meters, or None if calculation fails
+        """
+        x1, y1, x2, y2 = bbox
+        
+        # Method 1: Use foot keypoints if available (ankle keypoints: 15, 16)
+        if len(keypoints) > 16:
+            left_ankle = keypoints[15] if len(keypoints[15]) == 2 else None
+            right_ankle = keypoints[16] if len(keypoints[16]) == 2 else None
+            
+            if left_ankle and right_ankle:
+                # Use average of both ankles
+                foot_x = (left_ankle[0] + right_ankle[0]) / 2
+                foot_y = (left_ankle[1] + right_ankle[1]) / 2
+                ground_pos = self.pixel_to_ground_plane(foot_x, foot_y, camera_matrix, camera_height, camera_tilt)
+                if ground_pos:
+                    return ground_pos
+        
+        # Method 2: Use bottom center of bounding box
+        bbox_center_x = (x1 + x2) / 2
+        bbox_bottom_y = y2
+        ground_pos = self.pixel_to_ground_plane(bbox_center_x, bbox_bottom_y, camera_matrix, camera_height, camera_tilt)
+        return ground_pos
+
+    def pixel_to_ground_plane(self, pixel_x, pixel_y, camera_matrix, camera_height, camera_tilt=0.0):
+        """
+        Convert pixel coordinates to ground plane coordinates (X, Z).
+        
+        Returns:
+            (x, z) coordinates in meters, or None if point is above horizon
+        """
+        # Extract camera parameters
+        fx, fy = camera_matrix[0, 0], camera_matrix[1, 1]
+        cx, cy = camera_matrix[0, 2], camera_matrix[1, 2]
+        
+        # Convert to normalized coordinates
+        x_norm = (pixel_x - cx) / fx
+        y_norm = (pixel_y - cy) / fy
+        
+        # Apply camera tilt
+        cos_tilt = math.cos(camera_tilt)
+        sin_tilt = math.sin(camera_tilt)
+        
+        # Ray direction in camera coordinates
+        ray_x = x_norm
+        ray_y = y_norm * cos_tilt + sin_tilt  
+        ray_z = -y_norm * sin_tilt + cos_tilt
+        
+        # Check if we can intersect with ground (need forward ray with downward component)
+        if ray_y <= 0 or ray_z <= 0:
+            return None
+        
+        # Calculate intersection with ground plane
+        t = -camera_height / ray_y
+        
+        # Ground coordinates (X, Z)
+        ground_x = ray_x * t
+        ground_z = ray_z * t
+        
+        return (ground_x, ground_z)
+
+    def process_yolo_detections(self, cv_image):
+        """
+        Process image with YOLO and return detection results
+        
+        Returns:
+            List of detections with keypoints, bboxes, and ground coordinates
+        """
+        # Run YOLOv8 pose inference
+        results = self.yolo_model(cv_image)
+        detections = []
+        
+        if results[0].boxes is not None:
+            for i, (box, keypoints) in enumerate(zip(results[0].boxes, results[0].keypoints)):
+                # Get class name and confidence
+                class_id = int(box.cls[0])
+                class_name = self.yolo_model.names[class_id]
+                confidence = float(box.conf[0])
+                
+                # Only process person detections
+                if class_name == 'person':
+                    # Get bounding box coordinates
+                    x1, y1, x2, y2 = box.xyxy[0].tolist()
+                    bbox = [x1, y1, x2, y2]
+                    
+                    # Extract keypoints
+                    keypoints_list = []
+                    if keypoints is not None:
+                        keypoints_xy = keypoints.xy[0].tolist()
+                        keypoints_list = keypoints_xy
+                    
+                    # Get 3D ground position
+                    ground_coords = self.get_ground_coordinates(bbox, keypoints_list, self.camera_matrix, self.camera_height, self.camera_tilt)
+                    
+                    if ground_coords:
+                        x, y = ground_coords
+                        
+                        detection = {
+                            'id': i + 1,
+                            'confidence': confidence,
+                            'bbox': bbox,
+                            'keypoints': keypoints_list,
+                            'ground_position': {
+                                'x': x,
+                                'y': y,
+                                'z': 0.0  # Always on ground plane
+                            },
+                            'class_name': class_name,
+                            'image_width': cv_image.shape[1],
+                            'image_height': cv_image.shape[0]
+                        }
+                        detections.append(detection)
+        
+        # Publish detailed YOLO detections for RViz visualization
+        self.publish_yolo_detections(detections)
+        
+        return detections
+
+    def camera_callback(self, msg):
+        # Convert CompressedImage data to numpy array
+        np_arr = np.frombuffer(msg.data, np.uint8)
+        # Decode to OpenCV image
+        cv_image = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        
+        # Process image with YOLO
+        detections = self.process_yolo_detections(cv_image)
+        
+        if not detections:
+            rospy.logdebug("No person detections found")
+            return
+            
+        rospy.logdebug(f"Detected {len(detections)} person(s)")
+        
+        # Publish detected people coordinates and bounding boxes
+        self.publish_detected_people(detections)
+
+    def spin(self):
+        rospy.loginfo('Person Detector spinning...')
         rospy.spin()
 
 if __name__ == '__main__':
-    try:
-        detector = YOLOv8PoseDetector()
-        detector.run()
-    except rospy.ROSInterruptException:
-        rospy.loginfo("YOLOv8 Pose Detector shutting down...")
+    detector = PersonDetector()
+    detector.spin()
