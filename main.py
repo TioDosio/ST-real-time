@@ -6,6 +6,7 @@ import random
 from human_awareness_msgs.msg import PersonsList
 from visualization_msgs.msg import MarkerArray
 from tf2_msgs.msg import TFMessage
+from tf.transformations import euler_from_quaternion
 from view_predictions import TrajectoryEvaluator
 from evaluate_jta import load_model_and_config, evaluate_real_time_data
 from utils.utils import create_logger
@@ -22,6 +23,7 @@ class RealTimeDataCollector:
         self.interval = 5  # detection frequency is 5Hz, so interval of 5 means 1 second
         self.debug = False
         self.last_predictions = []
+        self.last_yaw = 0
 
         # Set random seeds for reproducibility
         random.seed(0)
@@ -110,12 +112,13 @@ class RealTimeDataCollector:
                         # Transform observations and predictions to odom frame before visualization
                         transformed_observations = self.transform_to_odom_frame(observations)
                         transformed_predictions = self.transform_to_odom_frame(predictions)
-                        
+                        self.last_predictions.append(transformed_predictions)
                         print(f"Original predictions sample: {predictions[:2] if len(predictions) > 1 else predictions}")
                         print(f"Transformed predictions sample: {transformed_predictions[:2] if len(transformed_predictions) > 1 else transformed_predictions}")
                         
                         # Visualize trajectories with transformed coordinates
-                        move_robot_to_coordinate(self.last_predictions)
+                        if len(self.last_predictions) > 3:
+                            move_robot_to_coordinate(self.last_predictions, self.last_yaw)
                         self.trajectory_evaluator.publish_trajectories_to_rviz(observations, ground_truth, transformed_predictions)
                         
                         if self.debug:          
@@ -464,7 +467,7 @@ class RealTimeDataCollector:
                 }
             
             local_frame['persons'].append(person_data)
-            
+        self.last_yaw = euler_from_quaternion([person.body_pose.orientation.x, person.body_pose.orientation.y, person.body_pose.orientation.z, person.body_pose.orientation.w])[2]  # yaw is the third element
         self.local_frames.append(local_frame)
     
     def save_debug_data(self, X, predictions):

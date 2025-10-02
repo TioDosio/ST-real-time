@@ -4,10 +4,20 @@ import actionlib
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from tf.transformations import quaternion_from_euler
 
-def move_robot_to_coordinate(coordinates):
+def mean_coordinates(coords, yaw):
+        if not coords:
+            print("No coordinates")
+        # use the last 3 coordinates of the list and remove outliers
+        last_coords = coords[-3:]
+        x_mean = sum(c[0] for c in last_coords) / len(last_coords)
+        y_mean = sum(c[1] for c in last_coords) / len(last_coords)
+
+        return (x_mean, y_mean)
+
+def move_robot_to_coordinate(coordinates, yaw):
     frame = "odom"
     timeout = 30
-    x, y, yaw = mean_coordinates(coordinates)
+    x, y = mean_coordinates(coordinates)
 
     try:
         # Initialize node if not already done
@@ -60,14 +70,3 @@ def move_robot_to_coordinate(coordinates):
     except Exception as e:
         rospy.logerr(f"Error in move_robot_to_coordinate: {e}")
         return False
-
-    def mean_coordinates(coords):
-        if not coords:
-            print("No coordinates")
-        # use the last 3 coordinates of the list and remove outliers
-        last_coords = coords[-3:]
-        x_mean = sum(c[0] for c in last_coords) / len(last_coords)
-        y_mean = sum(c[1] for c in last_coords) / len(last_coords)
-        yaw_mean = sum(c[2] for c in last_coords) / len(last_coords)
-
-        return (x_mean, y_mean, yaw_mean)
