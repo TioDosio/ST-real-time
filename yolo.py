@@ -156,10 +156,11 @@ class PersonDetector:
                             'image_height': cv_image.shape[0]
                         }
                         detections.append(detection)
-        
-        # Publish detailed YOLO detections for RViz visualization
-        self.publish_yolo_detections(detections)
-        
+        print(detection['ground_position']['x'])
+        print(detection['ground_position']['y'])
+        print(detection['confidence'])
+        print("--------------------------------------------------")
+
         return detections
 
     def camera_callback(self, msg):
@@ -176,9 +177,6 @@ class PersonDetector:
             return
             
         rospy.logdebug(f"Detected {len(detections)} person(s)")
-        
-        # Publish detected people coordinates and bounding boxes
-        self.publish_detected_people(detections)
 
     def spin(self):
         rospy.loginfo('Person Detector spinning...')
