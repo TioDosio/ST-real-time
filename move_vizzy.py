@@ -25,12 +25,6 @@ def mean_coordinates(coords, yaw):
         print("No coordinates provided")
         return (0.0, 0.0)
     
-    print(f"DEBUG: mean_coordinates received coords type: {type(coords)}")
-    print(f"DEBUG: coords length: {len(coords) if hasattr(coords, '__len__') else 'unknown'}")
-    if coords and len(coords) > 0:
-        print(f"DEBUG: first element type: {type(coords[0])}")
-        print(f"DEBUG: first element: {coords[0]}")
-    
     # Handle nested list structure - coords might be a list of trajectory lists
     # Flatten the coordinates if needed
     flattened_coords = []
@@ -47,9 +41,6 @@ def mean_coordinates(coords, yaw):
         print("No valid coordinates found after flattening")
         return (0.0, 0.0)
     
-    print(f"DEBUG: flattened_coords length: {len(flattened_coords)}")
-    print(f"DEBUG: flattened_coords sample: {flattened_coords[:3] if len(flattened_coords) >= 3 else flattened_coords}")
-    
     # Use the last 3 coordinates of the list and remove outliers
     last_coords = flattened_coords[-3:]
     
@@ -60,18 +51,13 @@ def mean_coordinates(coords, yaw):
         print("No valid coordinates with x,y values")
         return (0.0, 0.0)
     
-    print(f"DEBUG: valid_coords for averaging: {valid_coords}")
-    
     x_mean = sum(c[0] for c in valid_coords) / len(valid_coords)
     y_mean = sum(c[1] for c in valid_coords) / len(valid_coords)
-    
-    print(f"DEBUG: calculated mean: x={x_mean:.3f}, y={y_mean:.3f}")
 
     return (x_mean, y_mean)
 
-def move_robot_to_coordinate(coordinates, yaw):
+def move_robot_to_coordinate(coordinates, yaw, done_callback=None, active_callback=None, feedback_callback=None, allow_preemption=True):
     frame = "odom"
-    timeout = 0.05
     x, y = mean_coordinates(coordinates, yaw)
 
     try:
@@ -83,10 +69,6 @@ def move_robot_to_coordinate(coordinates, yaw):
         # Create action client
         client = actionlib.SimpleActionClient('move_base', MoveBaseAction)
         rospy.loginfo("Waiting for move_base action server...")
-        
-        if not client.wait_for_server(rospy.Duration(5.0)):
-            rospy.logerr("move_base action server not available")
-            return False
         
         # Create goal
         goal = MoveBaseGoal()
@@ -104,23 +86,17 @@ def move_robot_to_coordinate(coordinates, yaw):
         
         # Send goal
         rospy.loginfo(f"Moving to: x={x:.2f}, y={y:.2f}, yaw={yaw:.2f} rad")
-        client.send_goal(goal)
         
-        # Wait for result
-        finished = client.wait_for_result(rospy.Duration(timeout))
-        
-        if not finished:
-            rospy.logwarn(f"Goal timed out after {timeout} seconds")
-            client.cancel_goal()
-            return False
-        
-        state = client.get_state()
-        if state == actionlib.GoalStatus.SUCCEEDED:
-            rospy.loginfo("Successfully reached target!")
-            return True
+        if done_callback or active_callback or feedback_callback:
+            # Send goal with callbacks for async operation
+            client.send_goal(goal, done_callback, active_callback, feedback_callback)
         else:
-            rospy.logwarn(f"Failed to reach target. State: {state}")
-            return False
+            # Send goal without callbacks
+            client.send_goal(goal)
+        
+        # Return immediately without waiting
+        rospy.loginfo("Goal sent successfully, not waiting for completion")
+        return True
             
     except Exception as e:
         rospy.logerr(f"Error in move_robot_to_coordinate: {e}")
