@@ -99,7 +99,6 @@ class RealTimeDataCollector:
             
         # Take the most recent frames according to sequence length and interval
         recent_frames = self.local_frames[-self.seq_len * self.interval:]
-        print(f"Using {len(recent_frames)} recent frames")
         
         # Extract person trajectories (simplified version)
         trajectories = []
@@ -114,7 +113,6 @@ class RealTimeDataCollector:
                 
                 if frame_data:
                     trajectories.append(frame_data)
-                    print(f"Frame {i//self.interval}: {len(frame_data)} coordinates, first pos: {frame_data[0]}")
         
         # Convert to numpy array format expected by model
         if trajectories and len(trajectories) >= 9:  # Need at least input_track_size frames
@@ -235,17 +233,11 @@ class RealTimeDataCollector:
             padding_mask = torch.zeros(B, N, dtype=torch.bool)  # All people are valid (not padded)
             
             # Get predictions using the real-time evaluation function
-            print("Calling evaluate_real_time_data...")
             predictions = evaluate_real_time_data(self.model, self.config, input_joints, padding_mask)
             
             if predictions is not None:
-                print(f"Raw predictions shape: {predictions.shape}")
-                print(f"Raw predictions dtype: {predictions.dtype}")
-                print(f"Raw predictions range: min={torch.min(predictions).item():.3f}, max={torch.max(predictions).item():.3f}")
-                
                 # Convert predictions back to numpy and return
                 pred_numpy = predictions.detach().numpy()
-                print(f"Numpy predictions shape: {pred_numpy.shape}")
                 
                 # Check if predictions are reasonable
                 if pred_numpy.size == 0:
@@ -267,9 +259,7 @@ class RealTimeDataCollector:
                     # Fallback: flatten and reshape
                     trajectory_pred = pred_numpy.reshape(-1, 2)
                 
-                print(f"Extracted trajectory shape: {trajectory_pred.shape}")
                 pred_list = trajectory_pred.tolist()
-                print(f"Predictions list length: {len(pred_list)}")
                 return pred_list
             else:
                 print("ERROR: evaluate_real_time_data returned None")
@@ -303,7 +293,6 @@ class RealTimeDataCollector:
             # Calculate yaw angle from direction vector
             yaw = math.atan2(dy, dx)
             
-            print(f"Calculated direction: dx={dx:.3f}, dy={dy:.3f}, yaw={yaw:.3f} rad")
             return yaw
             
         except Exception as e:
