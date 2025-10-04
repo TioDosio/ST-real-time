@@ -5,6 +5,21 @@ import math
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from tf.transformations import quaternion_from_euler
 
+def stop_robot():
+    """
+    Stop - cancels ALL goals on the move_base server.
+    """
+    client = actionlib.SimpleActionClient('move_base', MoveBaseAction)
+    
+    if client.wait_for_server(rospy.Duration(0.5)):
+        # Cancel all goals (including from other clients)
+        client.cancel_all_goals()
+        rospy.loginfo("All goals cancelled - emergency stop")
+        return True
+    else:
+        rospy.logwarn("move_base action server not available")
+        return False
+
 def mean_coordinates(coords, yaw):
     if not coords:
         print("No coordinates provided")

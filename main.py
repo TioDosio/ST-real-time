@@ -9,7 +9,7 @@ from tf2_msgs.msg import TFMessage
 from view_predictions import TrajectoryEvaluator
 from evaluate_jta import load_model_and_config, evaluate_real_time_data
 from utils.utils import create_logger
-from move_vizzy import move_robot_to_coordinate
+from move_vizzy import move_robot_to_coordinate, stop_robot
 
 class RealTimeDataCollector:
     def __init__(self, checkpoint_path="realeases/jta/checkpoint/checkpoint.pth.tar"):
@@ -52,7 +52,25 @@ class RealTimeDataCollector:
 
     def image_detections_callback(self, msg):
         self.create_local_frame(msg)
-        
+        self.process_frames(msg)
+
+        if self.stop_condition(msg):
+            rospy.loginfo("Stopping robot due to proximity condition.")
+            stop_robot()
+            ## action of stopping the robot
+
+    def stop_condition(self, msg):
+        # if im a few than 1.5 meterts from the person and in the is in front of me within 30 degrees range stop
+        distance_threshold = 1.5  # meters
+        angle_threshold = math.radians(30)  # 30 degrees in radians
+        distance_person = math.sqrt(msg.point.x**2 + msg.point.y**2)
+
+        if distance_person < distance_threshold and self.last_yaw < angle_threshold and self.last_yaw > -angle_threshold:
+            return True
+        else:
+            return False
+
+    def process_frames(self):
         # Process frames when we have enough data
         if len(self.local_frames) > self.seq_len * self.interval + 1:
             try:
@@ -69,9 +87,9 @@ class RealTimeDataCollector:
                     
                     # Only visualize if we have predictions
                     if predictions:
-                        # Transform observations and predictions to odom frame before visualization
-                        transformed_observations = self.transform_to_odom_frame(observations)
-                        transformed_predictions = self.transform_to_odom_frame(predictions)
+                        # Transform observations and predictions to base_footprint frame before visualization
+                        transformed_observations = self.transform_to_base_footprint(observations)
+                        transformed_predictions = self.transform_to_base_footprint(predictions)
                         
                         # Calculate direction from trajectory predictions
                         self.last_yaw = self.calculate_direction_from_trajectory(transformed_predictions)
@@ -137,8 +155,8 @@ class RealTimeDataCollector:
             print(f"Not enough trajectory frames: {len(trajectories)} < 9")
             return None
 
-    def transform_to_odom_frame(self, points):
-        """Transform points from robot frame to odom frame using latest robot TF"""
+    def transform_to_base_footprint(self, points):
+        """Transform points from robot frame to base_footprint frame using latest robot TF"""
         if self.latest_robot_tf is None or points is None or len(points) == 0:
             print("No robot TF available or no points to transform")
             return points
