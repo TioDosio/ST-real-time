@@ -32,7 +32,7 @@ class SimplePersonFloorDetector:
         self.model = YOLO('yolov8m.pt')
 
         # Publishers
-        self.floor_coord_pub = rospy.Publisher('/person_floor_coordinates', PointStamped, queue_size=10)
+        self.floor_coord_pub = rospy.Publisher('/person_coordinates', PointStamped, queue_size=10)
         self.debug_image_pub = rospy.Publisher('/person_detection_debug', CompressedImage, queue_size=10)
 
         # Subscriber
