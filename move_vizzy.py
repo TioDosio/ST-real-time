@@ -3,22 +3,7 @@ import rospy
 import actionlib
 import math
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
-
-def quaternion_from_euler(roll, pitch, yaw):
-    """Convert Euler angles to quaternion (manual implementation to avoid tf import issues)"""
-    cy = math.cos(yaw * 0.5)
-    sy = math.sin(yaw * 0.5)
-    cp = math.cos(pitch * 0.5)
-    sp = math.sin(pitch * 0.5)
-    cr = math.cos(roll * 0.5)
-    sr = math.sin(roll * 0.5)
-    
-    qw = cr * cp * cy + sr * sp * sy
-    qx = sr * cp * cy - cr * sp * sy
-    qy = cr * sp * cy + sr * cp * sy
-    qz = cr * cp * sy - sr * sp * cy
-    
-    return [qx, qy, qz, qw]
+from tf.transformations import quaternion_from_euler
 
 def mean_coordinates(coords, yaw):
     if not coords:
@@ -79,8 +64,8 @@ def move_robot_to_coordinate(coordinates, yaw, done_callback=None, active_callba
         
         # Convert yaw to quaternion
         q = quaternion_from_euler(0, 0, yaw)
-        goal.target_pose.pose.orientation.x = q[0]
-        goal.target_pose.pose.orientation.y = q[1]
+        goal.target_pose.pose.orientation.x = q[0] + math.pi
+        goal.target_pose.pose.orientation.y = q[1] + math.pi
         goal.target_pose.pose.orientation.z = q[2]
         goal.target_pose.pose.orientation.w = q[3]
         
