@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import rospy
 import cv2
 import numpy as np
@@ -38,10 +36,9 @@ class SimplePersonFloorDetector:
         self.debug_image_pub = rospy.Publisher('/person_detection_debug', CompressedImage, queue_size=10)
 
         # Subscriber
-        self.image_sub = rospy.Subscriber('/vizzy/l_camera/suppressed_image_rect_color_sd/compressed', 
-                                        CompressedImage, self.image_callback)
+        self.image_sub = rospy.Subscriber('/vizzy/l_camera/suppressed_image_rect_color_sd/compressed', CompressedImage, self.image_callback)
 
-        rospy.loginfo("Simple Person Floor Detector initialized")
+        rospy.loginfo("Detector Initialized!")
 
     def image_callback(self, msg):
         try:
@@ -61,26 +58,23 @@ class SimplePersonFloorDetector:
                             # Get bounding box coordinates
                             x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                             # Calculate floor coordinates using the bottom center of bounding box
-                            floor_coords = self.pixel_to_floor_coordinates(
-                                (x1 + x2) / 2, y2, cv_image.shape)
+                            floor_coords = self.pixel_to_floor_coordinates((x1 + x2) / 2, y2)
                             if floor_coords is not None:
                                 # Publish floor coordinates
                                 self.publish_floor_coordinates(floor_coords, msg.header.stamp)
 
                                 # Draw debug visualization
-                                cv_image = self.draw_detection(cv_image, x1, y1, x2, y2, 
-                                                             floor_coords, float(box.conf))
+                                #cv_image = self.draw_detection(cv_image, x1, y1, x2, y2, floor_coords, float(box.conf))
 
-                                rospy.loginfo(f"Person at floor: x={floor_coords[1]:.4f}m, "
-                                            f"y={floor_coords[0]:.4f}m")
+                                rospy.loginfo(f"Person at floor: x={floor_coords[1]:.4f}m, "f"y={floor_coords[0]:.4f}m")
 
             # Publish debug image
-            self.publish_debug_image(cv_image, msg.header)
+            #self.publish_debug_image(cv_image, msg.header)
 
         except Exception as e:
             rospy.logerr(f"Error in image callback: {e}")
 
-    def pixel_to_floor_coordinates(self, pixel_x, pixel_y, image_shape):
+    def pixel_to_floor_coordinates(self, pixel_x, pixel_y):
         """
         Convert pixel coordinates to floor coordinates
         Assumes the bottom of the bounding box represents the person's feet on the ground
@@ -152,8 +146,8 @@ class SimplePersonFloorDetector:
             lateral_distance = ground_distance * np.tan(angle_x)
             
             
-            # Return floor coordinates (x=lateral, y=forward, z=0)
-            floor_coords = np.array([lateral_distance, ground_distance, 0.0])
+            # Return floor coordinates (x=lateral, y=forward)
+            floor_coords = np.array([lateral_distance, ground_distance])
             return floor_coords
 
         except Exception as e:
@@ -167,7 +161,6 @@ class SimplePersonFloorDetector:
         point_msg.header.frame_id = "odom"  # Adjust frame_id as needed
         point_msg.point.x = coords[0]
         point_msg.point.y = coords[1] 
-        point_msg.point.z = coords[2]
         self.floor_coord_pub.publish(point_msg)
 
     def draw_detection(self, image, x1, y1, x2, y2, floor_coords, confidence):
