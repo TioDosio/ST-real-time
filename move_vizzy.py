@@ -1,23 +1,78 @@
 #!/usr/bin/env python
 import rospy
 import actionlib
+import math
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
-from tf.transformations import quaternion_from_euler
+
+def quaternion_from_euler(roll, pitch, yaw):
+    """Convert Euler angles to quaternion (manual implementation to avoid tf import issues)"""
+    cy = math.cos(yaw * 0.5)
+    sy = math.sin(yaw * 0.5)
+    cp = math.cos(pitch * 0.5)
+    sp = math.sin(pitch * 0.5)
+    cr = math.cos(roll * 0.5)
+    sr = math.sin(roll * 0.5)
+    
+    qw = cr * cp * cy + sr * sp * sy
+    qx = sr * cp * cy - cr * sp * sy
+    qy = cr * sp * cy + sr * cp * sy
+    qz = cr * cp * sy - sr * sp * cy
+    
+    return [qx, qy, qz, qw]
 
 def mean_coordinates(coords, yaw):
-        if not coords:
-            print("No coordinates")
-        # use the last 3 coordinates of the list and remove outliers
-        last_coords = coords[-3:]
-        x_mean = sum(c[0] for c in last_coords) / len(last_coords)
-        y_mean = sum(c[1] for c in last_coords) / len(last_coords)
+    if not coords:
+        print("No coordinates provided")
+        return (0.0, 0.0)
+    
+    print(f"DEBUG: mean_coordinates received coords type: {type(coords)}")
+    print(f"DEBUG: coords length: {len(coords) if hasattr(coords, '__len__') else 'unknown'}")
+    if coords and len(coords) > 0:
+        print(f"DEBUG: first element type: {type(coords[0])}")
+        print(f"DEBUG: first element: {coords[0]}")
+    
+    # Handle nested list structure - coords might be a list of trajectory lists
+    # Flatten the coordinates if needed
+    flattened_coords = []
+    for item in coords:
+        if isinstance(item, list) and len(item) > 0:
+            if isinstance(item[0], list):
+                # This is a trajectory (list of points)
+                flattened_coords.extend(item)
+            else:
+                # This is a single point
+                flattened_coords.append(item)
+    
+    if not flattened_coords:
+        print("No valid coordinates found after flattening")
+        return (0.0, 0.0)
+    
+    print(f"DEBUG: flattened_coords length: {len(flattened_coords)}")
+    print(f"DEBUG: flattened_coords sample: {flattened_coords[:3] if len(flattened_coords) >= 3 else flattened_coords}")
+    
+    # Use the last 3 coordinates of the list and remove outliers
+    last_coords = flattened_coords[-3:]
+    
+    # Ensure all coordinates have at least 2 elements (x, y)
+    valid_coords = [c for c in last_coords if isinstance(c, list) and len(c) >= 2]
+    
+    if not valid_coords:
+        print("No valid coordinates with x,y values")
+        return (0.0, 0.0)
+    
+    print(f"DEBUG: valid_coords for averaging: {valid_coords}")
+    
+    x_mean = sum(c[0] for c in valid_coords) / len(valid_coords)
+    y_mean = sum(c[1] for c in valid_coords) / len(valid_coords)
+    
+    print(f"DEBUG: calculated mean: x={x_mean:.3f}, y={y_mean:.3f}")
 
-        return (x_mean, y_mean)
+    return (x_mean, y_mean)
 
 def move_robot_to_coordinate(coordinates, yaw):
     frame = "odom"
-    timeout = 30
-    x, y = mean_coordinates(coordinates)
+    timeout = 0.05
+    x, y = mean_coordinates(coordinates, yaw)
 
     try:
         # Initialize node if not already done
