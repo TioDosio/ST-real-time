@@ -66,7 +66,7 @@ class SimplePersonFloorDetector:
                                 # Draw debug visualization
                                 #cv_image = self.draw_detection(cv_image, x1, y1, x2, y2, floor_coords, float(box.conf))
 
-                                rospy.loginfo(f"Person at floor: x={floor_coords[1]:.4f}m, "f"y={floor_coords[0]:.4f}m")
+                                #rospy.loginfo(f"Person at floor: x={floor_coords[1]:.4f}m, "f"y={floor_coords[0]:.4f}m")
 
             # Publish debug image
             #self.publish_debug_image(cv_image, msg.header)
