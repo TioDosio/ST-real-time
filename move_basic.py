@@ -72,7 +72,7 @@ if __name__ == '__main__':
     # x_pred, y_pred, yaw_pred = your_prediction_function()
     
     # Then simply call:
-    success = move_robot_to_coordinate(2.5, -1.0, 1.57)  # x=2.5m, y=-1.0m, yaw=90°  
+    success = move_robot_to_coordinate(0.5, 0.5, 0)  # x=0.5m, y=0.5m, yaw=0 
     
     if success:
         print("Robot reached the target!")
