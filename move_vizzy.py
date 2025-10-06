@@ -3,14 +3,25 @@ import rospy
 import actionlib
 import math
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
-from tf.transformations import quaternion_from_euler
 
-def stop_robot():
+def yaw_to_quaternion(yaw):
+    """
+    Convert yaw angle to quaternion components.
+    
+    :param yaw: yaw angle in radians
+    :return: tuple of (x, y, z, w) quaternion components
+    """
+    # For rotation around z-axis only (yaw)
+    x = 0.0
+    y = 0.0
+    z = math.sin(yaw / 2.0)
+    w = math.cos(yaw / 2.0)
+    return x, y, z, w
+
+def stop_robot(client):
     """
     Stop - cancels ALL goals on the move_base server.
     """
-    client = actionlib.SimpleActionClient('move_base', MoveBaseAction)
-    
     if client.wait_for_server(rospy.Duration(0.5)):
         # Cancel all goals (including from other clients)
         client.cancel_all_goals()
@@ -20,45 +31,8 @@ def stop_robot():
         rospy.logwarn("move_base action server not available")
         return False
 
-def mean_coordinates(coords, yaw):
-    if not coords:
-        print("No coordinates provided")
-        return (0.0, 0.0)
-    
-    # Handle nested list structure - coords might be a list of trajectory lists
-    # Flatten the coordinates if needed
-    flattened_coords = []
-    for item in coords:
-        if isinstance(item, list) and len(item) > 0:
-            if isinstance(item[0], list):
-                # This is a trajectory (list of points)
-                flattened_coords.extend(item)
-            else:
-                # This is a single point
-                flattened_coords.append(item)
-    
-    if not flattened_coords:
-        print("No valid coordinates found after flattening")
-        return (0.0, 0.0)
-    
-    # Use the last 3 coordinates of the list and remove outliers
-    last_coords = flattened_coords[-3:]
-    
-    # Ensure all coordinates have at least 2 elements (x, y)
-    valid_coords = [c for c in last_coords if isinstance(c, list) and len(c) >= 2]
-    
-    if not valid_coords:
-        print("No valid coordinates with x,y values")
-        return (0.0, 0.0)
-    
-    x_mean = sum(c[0] for c in valid_coords) / len(valid_coords)
-    y_mean = sum(c[1] for c in valid_coords) / len(valid_coords)
-
-    return (x_mean, y_mean)
-
-def move_robot_to_coordinate(coordinates, yaw, done_callback=None, active_callback=None, feedback_callback=None, allow_preemption=True):
-    frame = "odom"
-    x, y = mean_coordinates(coordinates, yaw)
+def move_robot_to_coordinate(client, coordinates, yaw):
+    frame = "base_footprint"  # or "map" if using a map frame
 
     try:
         # Initialize node if not already done
@@ -67,32 +41,26 @@ def move_robot_to_coordinate(coordinates, yaw, done_callback=None, active_callba
             print("Initialized ROS node 'robot_navigation'")
         
         # Create action client
-        client = actionlib.SimpleActionClient('move_base', MoveBaseAction)
         rospy.loginfo("Waiting for move_base action server...")
         
         # Create goal
         goal = MoveBaseGoal()
         goal.target_pose.header.frame_id = frame
         goal.target_pose.header.stamp = rospy.Time.now()
-        goal.target_pose.pose.position.x = x
-        goal.target_pose.pose.position.y = y
+        goal.target_pose.pose.position.x = coordinates[0]
+        goal.target_pose.pose.position.y = coordinates[1]
         
         # Convert yaw to quaternion
-        q = quaternion_from_euler(0, 0, yaw)
-        goal.target_pose.pose.orientation.x = q[0] + math.pi
-        goal.target_pose.pose.orientation.y = q[1] + math.pi
-        goal.target_pose.pose.orientation.z = q[2]
-        goal.target_pose.pose.orientation.w = q[3]
+        qx, qy, qz, qw = yaw_to_quaternion(yaw)
+        goal.target_pose.pose.orientation.x = qx + math.pi
+        goal.target_pose.pose.orientation.y = qy + math.pi
+        goal.target_pose.pose.orientation.z = qz
+        goal.target_pose.pose.orientation.w = qw
         
         # Send goal
-        rospy.loginfo(f"Moving to: x={x:.2f}, y={y:.2f}, yaw={yaw:.2f} rad")
+        rospy.loginfo(f"Moving to: x={coordinates[0]:.2f}, y={coordinates[1]:.2f}, yaw={yaw:.2f} rad")
         
-        if done_callback or active_callback or feedback_callback:
-            # Send goal with callbacks for async operation
-            client.send_goal(goal, done_callback, active_callback, feedback_callback)
-        else:
-            # Send goal without callbacks
-            client.send_goal(goal)
+        client.send_goal(goal)
         
         # Return immediately without waiting
         rospy.loginfo("Goal sent successfully, not waiting for completion")
