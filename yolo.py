@@ -6,6 +6,10 @@ from geometry_msgs.msg import PointStamped
 from std_msgs.msg import Header
 from cv_bridge import CvBridge
 from ultralytics import YOLO
+from move_vizzy import move_robot_to_coordinate
+from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
+import actionlib
+from tf2_msgs.msg import TFMessage
 
 class SimplePersonFloorDetector:
     def __init__(self):
@@ -17,7 +21,7 @@ class SimplePersonFloorDetector:
             [0.0, 376.1876816184971, 239.82100277456647],
             [0.0, 0.0, 1.0]
         ])
-
+        self.client = actionlib.SimpleActionClient('move_base', MoveBaseAction)
         # Inverse of intrinsic matrix
         self.K_inv = np.linalg.inv(self.K)
 
@@ -36,8 +40,9 @@ class SimplePersonFloorDetector:
         self.debug_image_pub = rospy.Publisher('/person_detection_debug', CompressedImage, queue_size=10)
 
         # Subscriber
-        self.image_sub = rospy.Subscriber('/vizzy/l_camera/suppressed_image_rect_color_sd/compressed', CompressedImage, self.image_callback)
+        self.image_sub = rospy.Subscriber('/vizzy/r_camera/suppressed_image_rect_color_sd/compressed', CompressedImage, self.image_callback)
 
+        self.predictions = []
         rospy.loginfo("Detector Initialized!")
 
     def image_callback(self, msg):
@@ -59,20 +64,34 @@ class SimplePersonFloorDetector:
                             x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
                             # Calculate floor coordinates using the bottom center of bounding box
                             floor_coords = self.pixel_to_floor_coordinates((x1 + x2) / 2, y2)
+
                             if floor_coords is not None:
                                 # Publish floor coordinates
                                 self.publish_floor_coordinates(floor_coords, msg.header.stamp)
+                                self.predictions.append(floor_coords)
+                                move_robot_to_coordinate(self.client, [floor_coords[0], floor_coords[1]], self.compute_direction())
 
                                 # Draw debug visualization
                                 #cv_image = self.draw_detection(cv_image, x1, y1, x2, y2, floor_coords, float(box.conf))
 
-                                #rospy.loginfo(f"Person at floor: x={floor_coords[1]:.4f}m, "f"y={floor_coords[0]:.4f}m")
+                                rospy.loginfo(f"Person at floor: x={floor_coords[1]:.4f}m, "f"y={floor_coords[0]:.4f}m")
 
             # Publish debug image
             #self.publish_debug_image(cv_image, msg.header)
 
         except Exception as e:
             rospy.logerr(f"Error in image callback: {e}")
+
+    def compute_direction(self):
+        ## compute yaw angle from the last 2 predictions
+        if len(self.predictions) < 2:
+            return 0.0  # Not enough data to compute direction
+        p1 = self.predictions[-2]
+        p2 = self.predictions[-1]
+        direction_vector = np.array(p2) - np.array(p1)
+        # Calculate yaw angle from direction vector (atan2 gives angle in radians)
+        yaw = np.arctan2(direction_vector[1], direction_vector[0])
+        return yaw
 
     def pixel_to_floor_coordinates(self, pixel_x, pixel_y):
         """
@@ -158,7 +177,7 @@ class SimplePersonFloorDetector:
         """Publish floor coordinates"""
         point_msg = PointStamped()
         point_msg.header.stamp = timestamp
-        point_msg.header.frame_id = "odom"  # Adjust frame_id as needed
+        point_msg.header.frame_id = "base_footprint"
         point_msg.point.x = coords[0]
         point_msg.point.y = coords[1] 
         self.floor_coord_pub.publish(point_msg)
