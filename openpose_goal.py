@@ -96,22 +96,42 @@ class AdaptiveRobotNavigator:
         with self.lock:
             rospy.loginfo(f"Target at ({target_x:.2f}, {target_y:.2f}), distance: {current_distance:.2f}m")
             
+            print(f"\nMovement Decision Logic:")
+            print(f"  Current distance: {current_distance:.6f}m")
+            print(f"  Distance threshold: {self.distance_threshold}m")
+            print(f"  Previous distance: {self.previous_distance}")
+            print(f"  Is moving: {self.is_moving}")
+            
             # Check if we should start moving, stop, or continue
             if current_distance <= self.distance_threshold:
+                print(f"  Decision: Target is CLOSE (within threshold)")
                 if self.is_moving:
+                    print(f"  Action: STOPPING robot (was moving)")
                     rospy.loginfo("Close enough! Stopping robot.")
-                    self.client.cancel_goal()
+                    if hasattr(self, 'client'):
+                        self.client.cancel_goal()
                     self.is_moving = False
+                else:
+                    print(f"  Action: NO ACTION (already stopped)")
             else:
+                print(f"  Decision: Target is FAR (beyond threshold)")
                 # Check if we're moving away (distance increasing)
                 if self.previous_distance is not None:
                     if current_distance > self.previous_distance and not self.is_moving:
+                        print(f"  Action: STARTING navigation (moving away from target)")
                         rospy.loginfo("Moving away from target, starting navigation.")
                         self.move_to_target(target_x, target_y, target_pose.orientation)
+                    elif self.is_moving:
+                        print(f"  Action: CONTINUE moving (already in motion)")
+                    else:
+                        print(f"  Action: NO ACTION (getting closer or same distance)")
                 elif not self.is_moving:
+                    print(f"  Action: STARTING navigation (first detection, target far)")
                     # First time or robot is not moving and target is far
                     rospy.loginfo("Target detected, starting navigation.")
                     self.move_to_target(target_x, target_y, target_pose.orientation)
+                else:
+                    print(f"  Action: NO ACTION (first detection but already moving)")
             
             self.previous_distance = current_distance
     
@@ -119,6 +139,11 @@ class AdaptiveRobotNavigator:
         """
         Send a goal to move_base to navigate to the target position.
         """
+        print("\n" + "=" * 60)
+        print("MOVE_TO_TARGET CALLED!")
+        print("PREPARING NAVIGATION GOAL")
+        print("=" * 60)
+        
         try:
             # Build goal
             goal = MoveBaseGoal()
@@ -126,13 +151,45 @@ class AdaptiveRobotNavigator:
             goal.target_pose.header.stamp = rospy.Time.now()
             goal.target_pose.pose.position.x = x
             goal.target_pose.pose.position.y = y
+            goal.target_pose.pose.position.z = 0.0  # Explicitly set z to 0
             goal.target_pose.pose.orientation = orientation
             
-            rospy.loginfo(f"Sending goal: x={x:.2f}, y={y:.2f}")
-            self.client.send_goal(goal)
-            self.is_moving = True
+            print(f"Goal Details:")
+            print(f"  Frame ID: {goal.target_pose.header.frame_id}")
+            print(f"  Timestamp: {goal.target_pose.header.stamp.secs}.{goal.target_pose.header.stamp.nsecs}")
+            print(f"  Target Position:")
+            print(f"    x = {goal.target_pose.pose.position.x:.6f}")
+            print(f"    y = {goal.target_pose.pose.position.y:.6f}")
+            print(f"    z = {goal.target_pose.pose.position.z:.6f}")
+            print(f"  Target Orientation:")
+            print(f"    x = {goal.target_pose.pose.orientation.x:.6f}")
+            print(f"    y = {goal.target_pose.pose.orientation.y:.6f}")
+            print(f"    z = {goal.target_pose.pose.orientation.z:.6f}")
+            print(f"    w = {goal.target_pose.pose.orientation.w:.6f}")
+            
+            # Calculate and display the yaw angle from quaternion for reference
+            qz = goal.target_pose.pose.orientation.z
+            qw = goal.target_pose.pose.orientation.w
+            yaw_angle = 2 * math.atan2(qz, qw)
+            print(f"  Calculated Yaw Angle: {math.degrees(yaw_angle):.2f} degrees ({yaw_angle:.6f} radians)")
+            
+            print(f"\nAttempting to send goal to move_base action server...")
+            
+            if hasattr(self, 'client') and self.client:
+                rospy.loginfo(f"Sending goal: x={x:.2f}, y={y:.2f}, yaw={math.degrees(yaw_angle):.1f}°")
+                self.client.send_goal(goal)
+                self.is_moving = True
+                print("Goal sent successfully to move_base!")
+            else:
+                print("WARNING: move_base client not available - goal prepared but not sent")
+                print("(This is normal if move_base navigation stack is not running)")
+                # Still set is_moving to True for testing the logic
+                self.is_moving = True
+            
+            print("=" * 60)
             
         except Exception as e:
+            print(f"ERROR sending goal: {e}")
             rospy.logerr(f"Error sending goal: {e}")
             self.is_moving = False
     
