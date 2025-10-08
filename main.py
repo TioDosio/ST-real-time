@@ -3,7 +3,8 @@ import numpy as np
 import torch
 import random
 import math
-from geometry_msgs.msg import PointStamped
+import traceback
+from geometry_msgs.msg import PoseArray
 from visualization_msgs.msg import MarkerArray
 from tf2_msgs.msg import TFMessage
 from view_predictions import TrajectoryEvaluator
@@ -14,12 +15,15 @@ from move_vizzy import move_robot_to_coordinate, stop_robot
 class RealTimeDataCollector:
     def __init__(self, checkpoint_path="realeases/jta/checkpoint/checkpoint.pth.tar"):
         self.local_frames = []
-        self.latest_robot_tf = None
+        self.odom_base = None
         self.seq_len = 10
         self.interval = 5  # detection frequency is 5Hz, so interval of 5 means 1 second
         self.debug = False
         self.last_predictions = []
-        self.last_yaw = 0
+        self.last_orientation = None
+        self.min_distance = 1.8
+        self.max_distance = 10
+        self.can_move = True
 
         # Set random seeds for reproducibility
         random.seed(0)
@@ -41,34 +45,33 @@ class RealTimeDataCollector:
         self.trajectory_evaluator = TrajectoryEvaluator()
         
         # Subscribers
-        self.image_detections_sub = rospy.Subscriber('/person_coordinates', PointStamped, self.image_detections_callback)
-        self.tf_sub = rospy.Subscriber('/combined_tf', TFMessage, self.tf_callback)
+        self.image_detections_sub = rospy.Subscriber('/raw_bodies', PoseArray, self.image_detections_callback)
+        self.tf_sub = rospy.Subscriber('/odom', TFMessage, self.tf_callback)
 
     def tf_callback(self, msg):
         """Extract robot transform from TFMessage"""
         if msg.transforms:
             # Since we only have one transform now, take the first one
-            self.latest_robot_tf = msg.transforms[0]
+            if msg.header.child_frame_id == "base_footprint":
+                self.odom_base = msg.transforms[0]
 
     def image_detections_callback(self, msg):
+        if not msg.poses:
+            return
         self.create_local_frame(msg)
-        self.process_frames(msg)
+        self.move_or_stop()
 
-        if self.stop_condition(msg):
-            rospy.loginfo("Stopping robot due to proximity condition.")
-            stop_robot()
-            ## action of stopping the robot
+    def move_or_stop(self):
+        # if im a few than 1.5 meters from the person and in the is in front of me within 30 degrees range stop
+        if len(self.local_frames) == 0:
+            return False  # No poses, can't determine proximity
 
-    def stop_condition(self, msg):
-        # if im a few than 1.5 meterts from the person and in the is in front of me within 30 degrees range stop
-        distance_threshold = 1.5  # meters
-        angle_threshold = math.radians(30)  # 30 degrees in radians
-        distance_person = math.sqrt(msg.point.x**2 + msg.point.y**2)
+        angle_threshold = math.radians(30)
 
-        if distance_person < distance_threshold and self.last_yaw < angle_threshold and self.last_yaw > -angle_threshold:
-            return True
-        else:
-            return False
+        distance_person = math.sqrt(self.local_frames[-1]['coordinates'][0]['x']**2 + self.local_frames[-1]['coordinates'][0]['y']**2)
+
+        self.process_frames()
+        move_robot_to_coordinate(self.last_predictions, self.last_orientation)
 
     def process_frames(self):
         # Process frames when we have enough data
@@ -87,20 +90,11 @@ class RealTimeDataCollector:
                     
                     # Only visualize if we have predictions
                     if predictions:
-                        # Transform observations and predictions to base_footprint frame before visualization
-                        transformed_observations = self.transform_to_base_footprint(observations)
-                        transformed_predictions = self.transform_to_base_footprint(predictions)
-                        
-                        # Calculate direction from trajectory predictions
-                        self.last_yaw = self.calculate_direction_from_trajectory(transformed_predictions)
-                        
-                        self.last_predictions.append(transformed_predictions)
+                        # Since local_frames are already in odom frame, no transformation needed
+                        self.last_predictions.append(predictions)
 
-                        # Visualize trajectories with transformed coordinates
-                        if len(self.last_predictions) > 3:
-                            move_robot_to_coordinate(self.last_predictions, self.last_yaw)
-                        self.trajectory_evaluator.publish_trajectories_to_rviz(transformed_observations, ground_truth, transformed_predictions)
-                        
+                        if self.debug:
+                            self.trajectory_evaluator.publish_trajectories_to_rviz(observations, ground_truth, predictions)
                     else:
                         print("WARNING: Skipping visualization due to empty predictions")
                         return
@@ -109,7 +103,6 @@ class RealTimeDataCollector:
                     
             except Exception as e:
                 print(f"ERROR in prediction pipeline: {e}")
-                import traceback
                 print(traceback.format_exc())
 
     def extract_trajectory_data(self):
@@ -157,13 +150,13 @@ class RealTimeDataCollector:
 
     def transform_to_base_footprint(self, points):
         """Transform points from robot frame to base_footprint frame using latest robot TF"""
-        if self.latest_robot_tf is None or points is None or len(points) == 0:
+        if self.odom_base is None or points is None or len(points) == 0:
             print("No robot TF available or no points to transform")
             return points
             
         try:
             # Get robot transform (base_footprint to odom)
-            robot_trans = self.latest_robot_tf.transform
+            robot_trans = self.odom_base.transform
             robot_x = robot_trans.translation.x
             robot_y = robot_trans.translation.y
             
@@ -288,39 +281,12 @@ class RealTimeDataCollector:
             import traceback
             print(traceback.format_exc())
             return []
-    
-    def calculate_direction_from_trajectory(self, predictions):
-        """Calculate movement direction from trajectory predictions"""
-        try:
-            if not predictions or len(predictions) < 2:
-                return self.last_yaw  # Keep previous direction if not enough data
-            
-            # Get the first and last points of the trajectory
-            if isinstance(predictions[0], list) and len(predictions[0]) >= 2:
-                # Single trajectory format
-                start_point = predictions[0]
-                end_point = predictions[-1]
-            else:
-                # Handle other formats
-                return self.last_yaw
-            
-            # Calculate direction vector
-            dx = end_point[0] - start_point[0]
-            dy = end_point[1] - start_point[1]
-            
-            # Calculate yaw angle from direction vector
-            yaw = math.atan2(dy, dx)
-            
-            return yaw
-            
-        except Exception as e:
-            print(f"Error calculating direction: {e}")
-            return self.last_yaw
 
     def create_local_frame(self, msg):
         local_frame = {
             'timestamp': msg.header.stamp,
-            'coordinates': []
+            'coordinates': [],
+            'orientation': [],
         }
         coords = {
             'x': msg.point.x,
