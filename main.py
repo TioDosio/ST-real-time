@@ -5,7 +5,7 @@ import random
 import math
 import traceback
 from geometry_msgs.msg import PoseArray, Pose
-from tf2_msgs.msg import TFMessage
+from nav_msgs.msg import Odometry
 from view_predictions import TrajectoryEvaluator
 from evaluate_jta import load_model_and_config, evaluate_real_time_data
 from utils.utils import create_logger
@@ -41,21 +41,25 @@ class RealTimeDataCollector:
         
         # Subscribers
         self.image_detections_sub = rospy.Subscriber('/raw_bodies', PoseArray, self.image_detections_callback)
-        self.tf_sub = rospy.Subscriber('/odom', TFMessage, self.tf_callback)
+        self.tf_sub = rospy.Subscriber('/odom', Odometry, self.tf_callback)
 
         # Publisher for goal pose
         self.goal_pose_pub = rospy.Publisher('/goal_pose', PoseArray, queue_size=10)
 
     def tf_callback(self, msg):
-        """Extract robot transform from TFMessage"""
-        if msg.transforms:
-            if msg.header.child_frame_id == "base_footprint":
-                self.odom_base = msg.transforms[0]
+        """Extract robot transform from Odometry message"""
+        #print(f"[DEBUG] Odometry callback received for frame: {msg.child_frame_id}")
+        if msg.child_frame_id == "base_footprint":
+            self.odom_base = msg
+            #print(f"[DEBUG] Robot odometry updated - Position: x={msg.pose.pose.position.x:.3f}, y={msg.pose.pose.position.y:.3f}")
+
 
     def image_detections_callback(self, msg):
+        #print(f"[DEBUG] Image detections callback received with {len(msg.poses)} poses")
         if not msg.poses:
             return
         self.create_local_frame(msg)
+        #print(f"[DEBUG] Total local frames stored: {len(self.local_frames)}")
         self.process_frames()
         self.approach()
 
@@ -76,8 +80,8 @@ class RealTimeDataCollector:
                 
                 # Get current robot position
                 if self.odom_base is not None:
-                    robot_x = self.odom_base.transform.translation.x
-                    robot_y = self.odom_base.transform.translation.y
+                    robot_x = self.odom_base.pose.pose.position.x
+                    robot_y = self.odom_base.pose.pose.position.y
                     
                     # Check if we're close enough to the target (within 0.5m)
                     distance_to_target = math.sqrt((robot_x - target_x)**2 + (robot_y - target_y)**2)
@@ -126,10 +130,9 @@ class RealTimeDataCollector:
 
     def extract_trajectory_data(self):
         """Extract trajectory data from recent local frames"""
-            
+
         # Take the most recent frames according to sequence length and interval
         recent_frames = self.local_frames[-self.seq_len * self.interval:]
-        
         # Extract person trajectories (simplified version)
         trajectories = []
         
@@ -138,8 +141,10 @@ class RealTimeDataCollector:
             if i < len(recent_frames):
                 frame = recent_frames[i]
                 frame_data = []
-                coords = frame['coordinates'][0]
-                frame_data.append([coords['x'], coords['y']])
+                if len(frame['coordinates']) > 0:
+                    coords = frame['coordinates'][0]
+                    frame_data.append([coords['x'], coords['y']])
+                    #print(f"[DEBUG] Frame {i//self.interval}: person at x={coords['x']:.3f}, y={coords['y']:.3f}")
                 
                 if frame_data:
                     trajectories.append(frame_data)
@@ -173,12 +178,12 @@ class RealTimeDataCollector:
             return orientation
             
         try:
-            # Get robot's orientation quaternion from transform
-            robot_trans = self.odom_base.transform
-            robot_qx = robot_trans.rotation.x
-            robot_qy = robot_trans.rotation.y
-            robot_qz = robot_trans.rotation.z
-            robot_qw = robot_trans.rotation.w
+            # Get robot's orientation quaternion from odometry
+            robot_pose = self.odom_base.pose.pose
+            robot_qx = robot_pose.orientation.x
+            robot_qy = robot_pose.orientation.y
+            robot_qz = robot_pose.orientation.z
+            robot_qw = robot_pose.orientation.w
             
             # Quaternion multiplication to combine orientations: q_result = q_robot * q_local
             q1_w, q1_x, q1_y, q1_z = robot_qw, robot_qx, robot_qy, robot_qz  # robot orientation
@@ -211,11 +216,11 @@ class RealTimeDataCollector:
             return coords
         
         try:
-            # Get robot transform (base_footprint to odom)
-            robot_trans = self.odom_base.transform
-            robot_x = robot_trans.translation.x
-            robot_y = robot_trans.translation.y
-            robot_z = robot_trans.translation.z
+            # Get robot position from odometry (base_footprint to odom)
+            robot_pose = self.odom_base.pose.pose
+            robot_x = robot_pose.position.x
+            robot_y = robot_pose.position.y
+            robot_z = robot_pose.position.z
             
             # Create a copy to avoid modifying the original
             transformed_coords = coords.copy()
@@ -234,7 +239,7 @@ class RealTimeDataCollector:
             return transformed_coords
             
         except Exception as e:
-            print(f"Error in translation transformation: {e}")
+            #print(f"Error in translation transformation: {e}")
             return coords
 
 
@@ -326,7 +331,7 @@ class RealTimeDataCollector:
         }
         
         # Extract coordinates and orientation from all poses in the PoseArray
-        for pose in msg.poses:
+        for i, pose in enumerate(msg.poses):
             coords = {
                 'x': pose.position.x,
                 'y': pose.position.y,
