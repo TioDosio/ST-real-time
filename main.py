@@ -4,13 +4,11 @@ import torch
 import random
 import math
 import traceback
-from geometry_msgs.msg import PoseArray
-from visualization_msgs.msg import MarkerArray
+from geometry_msgs.msg import PoseArray, Pose
 from tf2_msgs.msg import TFMessage
 from view_predictions import TrajectoryEvaluator
 from evaluate_jta import load_model_and_config, evaluate_real_time_data
 from utils.utils import create_logger
-from move_vizzy import move_robot_to_coordinate, stop_robot
 
 class RealTimeDataCollector:
     def __init__(self, checkpoint_path="realeases/jta/checkpoint/checkpoint.pth.tar"):
@@ -48,6 +46,9 @@ class RealTimeDataCollector:
         self.image_detections_sub = rospy.Subscriber('/raw_bodies', PoseArray, self.image_detections_callback)
         self.tf_sub = rospy.Subscriber('/odom', TFMessage, self.tf_callback)
 
+        # Publisher for goal pose
+        self.goal_pose_pub = rospy.Publisher('/goal_pose', PoseArray, queue_size=10)
+
     def tf_callback(self, msg):
         """Extract robot transform from TFMessage"""
         if msg.transforms:
@@ -59,19 +60,42 @@ class RealTimeDataCollector:
         if not msg.poses:
             return
         self.create_local_frame(msg)
-        self.move_or_stop()
+        self.approach()
 
-    def move_or_stop(self):
-        # if im a few than 1.5 meters from the person and in the is in front of me within 30 degrees range stop
+    def approach(self):
+        # Check if we have enough data to make decisions
         if len(self.local_frames) == 0:
-            return False  # No poses, can't determine proximity
-
-        angle_threshold = math.radians(30)
-
-        distance_person = math.sqrt(self.local_frames[-1]['coordinates'][0]['x']**2 + self.local_frames[-1]['coordinates'][0]['y']**2)
+            return False
 
         self.process_frames()
-        move_robot_to_coordinate(self.last_predictions, self.last_orientation)
+        
+        # Calculate target position from latest predictions
+        if self.last_predictions:
+            # Get the most recent prediction
+            latest_prediction = self.last_predictions[-1]
+            
+            if latest_prediction:
+                pred_array = np.array(latest_prediction)
+                target_x = np.mean(pred_array[:, 0])
+                target_y = np.mean(pred_array[:, 1])
+                
+                # Get current robot position
+                if self.odom_base is not None:
+                    robot_x = self.odom_base.transform.translation.x
+                    robot_y = self.odom_base.transform.translation.y
+                    
+                    # Check if we're close enough to the target (within 0.5m)
+                    distance_to_target = math.sqrt((robot_x - target_x)**2 + (robot_y - target_y)**2)
+                    
+                    if distance_to_target < 0.5:
+                        # Stop the robot - we're close enough
+                        self.move_or_stop(0, 0, 0, 0)
+                    else:
+                        # Move towards the predicted position
+                        self.move_or_stop(target_x, target_y, 1, self.last_orientation)
+                else:
+                    # No robot TF available, can't determine distance
+                    self.move_or_stop(target_x, target_y, 1, self.last_orientation)
 
     def process_frames(self):
         # Process frames when we have enough data
@@ -148,59 +172,76 @@ class RealTimeDataCollector:
             print(f"Not enough trajectory frames: {len(trajectories)} < 9")
             return None
 
-    def transform_to_base_footprint(self, points):
-        """Transform points from robot frame to base_footprint frame using latest robot TF"""
-        if self.odom_base is None or points is None or len(points) == 0:
-            print("No robot TF available or no points to transform")
-            return points
+    def rotation_tf(self, orientation):
+        if self.odom_base is None:
+            print("No robot TF available for rotation")
+            return orientation
             
+        try:
+            # Get robot's orientation quaternion from transform
+            robot_trans = self.odom_base.transform
+            robot_qx = robot_trans.rotation.x
+            robot_qy = robot_trans.rotation.y
+            robot_qz = robot_trans.rotation.z
+            robot_qw = robot_trans.rotation.w
+            
+            # Quaternion multiplication to combine orientations: q_result = q_robot * q_local
+            q1_w, q1_x, q1_y, q1_z = robot_qw, robot_qx, robot_qy, robot_qz  # robot orientation
+            q2_w, q2_x, q2_y, q2_z = orientation['w'], orientation['x'], orientation['y'], orientation['z']  # local orientation
+            
+            # Quaternion multiplication formula
+            result_w = q1_w * q2_w - q1_x * q2_x - q1_y * q2_y - q1_z * q2_z
+            result_x = q1_w * q2_x + q1_x * q2_w + q1_y * q2_z - q1_z * q2_y
+            result_y = q1_w * q2_y - q1_x * q2_z + q1_y * q2_w + q1_z * q2_x
+            result_z = q1_w * q2_z + q1_x * q2_y - q1_y * q2_x + q1_z * q2_w
+            
+            # Return transformed orientation in same format as input
+            transformed_orientation = {
+                'x': result_x,
+                'y': result_y,
+                'z': result_z,
+                'w': result_w
+            }
+            
+            return transformed_orientation
+            
+        except Exception as e:
+            print(f"Error in rotation transformation: {e}")
+            return orientation
+
+
+    def translation_tf(self, coords):
+        if self.odom_base is None:
+            print("No robot TF available for translation")
+            return coords
+        
         try:
             # Get robot transform (base_footprint to odom)
             robot_trans = self.odom_base.transform
             robot_x = robot_trans.translation.x
             robot_y = robot_trans.translation.y
+            robot_z = robot_trans.translation.z
             
-            # For simplicity, assuming no rotation (can be extended if needed)
-            # Transform points: robot_frame_point + robot_position_in_odom = odom_frame_point
-            transformed_points = []
+            # Create a copy to avoid modifying the original
+            transformed_coords = coords.copy()
             
-            if isinstance(points, list) and len(points) > 0:
-                # Check if it's a list of trajectories (observations format) or single trajectory (predictions format)
-                if isinstance(points[0], list) and len(points[0]) > 0 and isinstance(points[0][0], list):
-                    # List of trajectories format: [[trajectory1], [trajectory2], ...]
-                    for trajectory in points:
-                        transformed_traj = []
-                        for point in trajectory:
-                            if isinstance(point, list) and len(point) >= 2:
-                                transformed_point = [point[0] + robot_x, point[1] + robot_y]
-                                transformed_traj.append(transformed_point)
-                        transformed_points.append(transformed_traj)
-                elif isinstance(points[0], list) and len(points[0]) >= 2:
-                    # Single trajectory format: [[x1, y1], [x2, y2], ...]
-                    for point in points:
-                        if isinstance(point, list) and len(point) >= 2:
-                            transformed_point = [point[0] + robot_x, point[1] + robot_y]
-                            transformed_points.append(transformed_point)
-                else:
-                    # Handle other list formats
-                    transformed_points = points
-                    
-            elif hasattr(points, 'shape'):  # Numpy array
-                points_copy = np.copy(points)
-                if len(points_copy.shape) >= 2 and points_copy.shape[1] >= 2:
-                    points_copy[:, 0] += robot_x  # Add robot x to all x coordinates
-                    points_copy[:, 1] += robot_y  # Add robot y to all y coordinates
-                transformed_points = points_copy
+            # Transform coordinates to odom frame
+            transformed_coords['x'] = coords['x'] + robot_x
+            transformed_coords['y'] = coords['y'] + robot_y
+            
+            # Handle z coordinate if it exists in input
+            if 'z' in coords:
+                transformed_coords['z'] = coords['z'] + robot_z
             else:
-                transformed_points = points
-            
-            return transformed_points
+                # If z not in input, add it with robot's z offset
+                transformed_coords['z'] = robot_z
+                
+            return transformed_coords
             
         except Exception as e:
-            print(f"Error transforming to odom frame: {e}")
-            import traceback
-            print(traceback.format_exc())
-            return points
+            print(f"Error in translation transformation: {e}")
+            return coords
+
 
     def predict_trajectories(self, X):
         """Use the loaded model to predict trajectories from processed frame data"""
@@ -288,13 +329,52 @@ class RealTimeDataCollector:
             'coordinates': [],
             'orientation': [],
         }
-        coords = {
-            'x': msg.point.x,
-            'y': msg.point.y
-        }
         
-        local_frame['coordinates'].append(coords)
-        self.local_frames.append(local_frame)
+        # Extract coordinates and orientation from all poses in the PoseArray
+        for pose in msg.poses:
+            coords = {
+                'x': pose.position.x,
+                'y': pose.position.y,
+                'z': pose.position.z
+            }
+            orientation = {
+                'x': pose.orientation.x,
+                'y': pose.orientation.y,
+                'z': pose.orientation.z,
+                'w': pose.orientation.w
+            }
+
+            # Transform coordinates and orientation to odom frame
+            transformed_coords = self.translation_tf(coords)
+            transformed_orientation = self.rotation_tf(orientation)
+            
+            local_frame['coordinates'].append(transformed_coords)
+            local_frame['orientation'].append(transformed_orientation)
+
+        # Only add frame if it has at least one pose
+        if local_frame['coordinates'] and local_frame['orientation']:
+            self.last_orientation = local_frame['orientation'][0]
+            self.local_frames.append(local_frame)
+
+    def move_or_stop(self, x, y, flag, orientation):
+        """Send goal pose to move the robot"""
+        pose_array = PoseArray()
+        pose_array.header.stamp = rospy.Time.now()
+        pose_array.header.frame_id = "odom"  # Using odom frame for goal
+        
+        pose = Pose()
+        pose.position.x = x
+        pose.position.y = y
+        pose.position.z = flag
+
+        if isinstance(orientation, dict):
+            pose.orientation.x = orientation.get('x', 0.0)
+            pose.orientation.y = orientation.get('y', 0.0)
+            pose.orientation.z = orientation.get('z', 0.0)
+            pose.orientation.w = orientation.get('w', 1.0)
+        
+        pose_array.poses.append(pose)
+        self.goal_pose_pub.publish(pose_array)
 
     def spin(self):
         rospy.loginfo('RealTimeDataCollector spinning...')
