@@ -19,9 +19,6 @@ class RealTimeDataCollector:
         self.debug = False
         self.last_predictions = []
         self.last_orientation = None
-        self.min_distance = 1.8
-        self.max_distance = 10
-        self.can_move = True
 
         # Set random seeds for reproducibility
         random.seed(0)
@@ -52,7 +49,6 @@ class RealTimeDataCollector:
     def tf_callback(self, msg):
         """Extract robot transform from TFMessage"""
         if msg.transforms:
-            # Since we only have one transform now, take the first one
             if msg.header.child_frame_id == "base_footprint":
                 self.odom_base = msg.transforms[0]
 
@@ -60,14 +56,13 @@ class RealTimeDataCollector:
         if not msg.poses:
             return
         self.create_local_frame(msg)
+        self.process_frames()
         self.approach()
 
     def approach(self):
         # Check if we have enough data to make decisions
         if len(self.local_frames) == 0:
             return False
-
-        self.process_frames()
         
         # Calculate target position from latest predictions
         if self.last_predictions:
