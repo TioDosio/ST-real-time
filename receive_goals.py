@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 import rospy
 import actionlib
 import math
@@ -33,11 +32,6 @@ class AdaptiveRobotNavigator:
             topic_name (str): ROS topic name to subscribe to for pose messages
             distance_threshold (float): Distance threshold in meters to consider "close enough"
         """
-        self.distance_threshold = 1.6
-        self.max_distance_threshold = 10.0
-        self.current_target = None
-        self.previous_distance = None
-        self.pose_count = None
         
         # Initialize ROS node
         if not rospy.get_node_uri():
@@ -57,8 +51,7 @@ class AdaptiveRobotNavigator:
         
         # Subscribe to pose array topic
         self.pose_subscriber = rospy.Subscriber("/goal_pose", PoseArray, self.pose_callback)
-        rospy.loginfo("Subscribed to {} with distance threshold: {}m".format("/goal_pose", self.distance_threshold))
-        rospy.loginfo("Waiting for pose messages... Use 'rostopic echo /goal_pose' to check if messages are being published")
+        rospy.loginfo("Waiting for pose messages...s")
 
     def pose_callback(self, msg):
         """
@@ -104,7 +97,7 @@ class AdaptiveRobotNavigator:
         except Exception as e:
             rospy.logerr("Error sending goal: {}".format(e))
     
-    def goal_done_callback(self, status, result):
+    def goal_done_callback(self, status):
         """
         Callback when goal is completed (success, failure, or cancelled).
         """
