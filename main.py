@@ -89,10 +89,14 @@ class RealTimeDataCollector:
                     if distance_to_target < 0.5:
                         # Stop the robot - we're close enough
                         self.move_or_stop(0, 0, 0, 0)
+                        print("Close enough to target, stopping robot")
                     else:
+                        # print the current odom coordinate and the target coordinate
+                        print(f"Robot position: x={robot_x:.3f}, y={robot_y:.3f} | Target position: x={target_x:.3f}, y={target_y:.3f}")
                         # Move towards the predicted position
                         self.move_or_stop(target_x, target_y, 1, self.last_orientation)
                 else:
+                    print("No robot TF available, can't determine distance")
                     # No robot TF available, can't determine distance
                     self.move_or_stop(target_x, target_y, 1, self.last_orientation)
 
@@ -360,7 +364,7 @@ class RealTimeDataCollector:
         """Send goal pose to move the robot"""
         pose_array = PoseArray()
         pose_array.header.stamp = rospy.Time.now()
-        pose_array.header.frame_id = "odom"  # Using odom frame for goal
+        pose_array.header.frame_id = "odom"
         
         pose = Pose()
         pose.position.x = x
