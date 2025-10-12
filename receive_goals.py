@@ -4,25 +4,6 @@ import math
 from move_base_msgs.msg import MoveBaseAction, MoveBaseGoal
 from geometry_msgs.msg import PoseArray
 
-def quaternion_from_euler(roll, pitch, yaw):
-    """
-    Convert Euler angles to quaternion.
-    Compatible replacement for tf.transformations.quaternion_from_euler
-    """
-    cy = math.cos(yaw * 0.5)
-    sy = math.sin(yaw * 0.5)
-    cp = math.cos(pitch * 0.5)
-    sp = math.sin(pitch * 0.5)
-    cr = math.cos(roll * 0.5)
-    sr = math.sin(roll * 0.5)
-
-    w = cr * cp * cy + sr * sp * sy
-    x = sr * cp * cy - cr * sp * sy
-    y = cr * sp * cy + sr * cp * sy
-    z = cr * cp * sy - sr * sp * cy
-
-    return [x, y, z, w]
-
 class AdaptiveRobotNavigator:
     def __init__(self):
         """
@@ -84,8 +65,7 @@ class AdaptiveRobotNavigator:
             goal.target_pose.pose.orientation = orientation
             
             if hasattr(self, 'client') and self.client:
-                self.client.send_goal(goal, done_cb=self.goal_done_callback, 
-                                    feedback_cb=self.goal_feedback_callback)
+                self.client.send_goal(goal, done_cb=self.goal_done_callback)
                 rospy.loginfo("Goal sent successfully")
                 
                 # Check goal status after a short delay
@@ -110,14 +90,6 @@ class AdaptiveRobotNavigator:
             rospy.loginfo("Navigation goal was cancelled")
         else:
             rospy.logwarn("Navigation goal finished with status: {}".format(status))
-    
-    def goal_feedback_callback(self, feedback):
-        """
-        Callback for goal feedback (current robot position during navigation).
-        """
-        current_pos = feedback.base_position.pose.position
-        rospy.loginfo("Robot moving - current position: x={:.2f}, y={:.2f}".format(
-            current_pos.x, current_pos.y))
     
     def check_goal_status(self):
         """
