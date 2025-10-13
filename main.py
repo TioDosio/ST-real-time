@@ -18,13 +18,11 @@ class RealTimeDataCollector:
         self.interval = 5  # detection frequency is 5Hz, so interval of 5 means 1 second
         self.debug = False
         self.last_predictions = []
-        self.last_orientation = None
 
         # Movement tracking variables
         self.last_robot_position = None
-        self.stationary_threshold = 2  # seconds - how long to wait before going to persons
+        self.stationary_threshold = 0.  5  # seconds - how long to wait before going to persons
         self.movement_threshold = 0.5    # meters - minimum movement to consider as "moving"
-        self.current_person_position = None  # Store latest person position from /raw_bodies
 
         # Set random seeds for reproducibility
         random.seed(0)
@@ -32,7 +30,6 @@ class RealTimeDataCollector:
         torch.manual_seed(0)
 
         rospy.init_node('real_time_data_collector', anonymous=True)
-        self.last_movement_time = rospy.Time.now()
 
         # Initialize logger
         self.logger = create_logger('')
@@ -55,26 +52,11 @@ class RealTimeDataCollector:
 
     def tf_callback(self, msg):
         """Extract robot transform from Odometry message"""
-        #print(f"[DEBUG] Odometry callback received for frame: {msg.child_frame_id}")
         if msg.child_frame_id == "base_footprint":
-            # Check if robot has moved
-            current_position = (msg.pose.pose.position.x, msg.pose.pose.position.y)
-            
-            if self.last_robot_position is not None:
-                distance_moved = math.sqrt(
-                    (current_position[0] - self.last_robot_position[0])**2 + 
-                    (current_position[1] - self.last_robot_position[1])**2
-                )
-                
-                # If robot moved more than threshold, update last movement time
-                if distance_moved > self.movement_threshold:
-                    self.last_movement_time = rospy.Time.now()
-                    #print(f"[DEBUG] Robot moved {distance_moved:.3f}m, updating movement time")
-            
-            self.last_robot_position = current_position
+            # Save the robot's current position
+            self.last_robot_position = (msg.pose.pose.position.x, msg.pose.pose.position.y)
             self.odom_base = msg
             #print(f"[DEBUG] Robot odometry updated - Position: x={msg.pose.pose.position.x:.3f}, y={msg.pose.pose.position.y:.3f}")
-
 
     def image_detections_callback(self, msg):
         #print(f"[DEBUG] Image detections callback received with {len(msg.poses)} poses")
@@ -90,70 +72,95 @@ class RealTimeDataCollector:
         if len(self.local_frames) == 0:
             return False
         
-        # Check if robot has been stationary for too long
+        # Check if person has been stationary for too long
         if self.check_if_stationary():
-            print("Robot has been stationary, moving to persons' front")
+            print("Person has been stationary, moving to person's front")
             return
         
         # Calculate target position from latest predictions
-        if self.last_predictions:
+        if len(self.last_predictions) > 0:
             # Get the most recent prediction
             latest_prediction = self.last_predictions[-1]
             
-            if latest_prediction:
-                pred_array = np.array(latest_prediction)
-                target_x = np.mean(pred_array[:, 0])
-                target_y = np.mean(pred_array[:, 1])
+            pred_array = np.array(latest_prediction)
+            target_x = np.mean(pred_array[:, 0])
+            target_y = np.mean(pred_array[:, 1])
+            
+            # Get current robot position
+            if self.odom_base is not None:
+                robot_x = self.odom_base.pose.pose.position.x
+                robot_y = self.odom_base.pose.pose.position.y
                 
-                # Get current robot position
-                if self.odom_base is not None:
-                    robot_x = self.odom_base.pose.pose.position.x
-                    robot_y = self.odom_base.pose.pose.position.y
-                    
-                    # Check if we're close enough to the target (within 0.5m)
-                    distance_to_target = math.sqrt((robot_x - target_x)**2 + (robot_y - target_y)**2)
-                    
-                    if distance_to_target < 0.5:
-                        # Stop the robot - we're close enough
-                        self.move_or_stop(0, 0, 0, 0)
-                        print("Close enough to target, stopping robot")
-                    else:
-                        # print the current odom coordinate and the target coordinate
-                        print(f"Robot position: x={robot_x:.3f}, y={robot_y:.3f} | Target position: x={target_x:.3f}, y={target_y:.3f}")
-                        # Move towards the predicted position
-                        self.move_or_stop(target_x, target_y, 1, self.last_orientation)
+                # Check if we're close enough to the target (within 0.5m)
+                distance_to_target = math.sqrt((robot_x - target_x)**2 + (robot_y - target_y)**2)
+                
+                if distance_to_target < 0.5: ## here we can make sure the robot is oriented in the persons direction
+                    self.move_or_stop(0, 0, 0, 0) # Stop the robot - we're close enough
+                    print("Close enough to target, stopping robot")
                 else:
-                    print("No robot TF available, can't determine distance")
-                    # No robot TF available, can't determine distance
-                    self.move_or_stop(target_x, target_y, 1, self.last_orientation)
+                    # print the current odom coordinate and the target coordinate
+                    print(f"Robot position: x={robot_x:.3f}, y={robot_y:.3f} | Target position: x={target_x:.3f}, y={target_y:.3f}")
+                    # Move towards the predicted position
+                    self.move_or_stop(target_x, target_y, 1, self.calculate_orientation_to_person(self.local_frames[-1]['coordinates'][0]['x'], self.local_frames[-1]['coordinates'][0]['y'], target_x, target_y))
+            else:
+                print("No robot TF available, can't determine distance")
+                # No robot TF available, can't determine distance
+                self.move_or_stop(target_x, target_y, 1, self.calculate_orientation_to_person(self.local_frames[-1]['coordinates'][0]['x'], self.local_frames[-1]['coordinates'][0]['y'], target_x, target_y))
 
     def check_if_stationary(self):
-        """Check if robot has been stationary for the threshold time"""
-        if self.odom_base is None or self.current_person_position is None:
+        """Check if person has been stationary (moved less than 0.5m in last 10 frames)"""
+        if len(self.local_frames) < 10:
             return False
         
-        current_time = rospy.Time.now()
-        time_stationary = (current_time - self.last_movement_time).to_sec()
+        # Get the last 10 frames
+        last_10_frames = self.local_frames[-10:]
         
-        if time_stationary > self.stationary_threshold:
-            # Robot has been stationary, move to person's front
+        # Check if all frames have at least one person
+        person_positions = []
+        for frame in last_10_frames:
+            if len(frame['coordinates']) > 0:
+                # Get first person's position
+                person_x = frame['coordinates'][0]['x']
+                person_y = frame['coordinates'][0]['y']
+                person_positions.append((person_x, person_y))
+            else:
+                # If any frame doesn't have a person, we can't determine movement
+                return False
+        
+        # Calculate the maximum distance moved between any two positions in the last 10 frames
+        max_distance_moved = 0.0
+        for i in range(len(person_positions)):
+            for j in range(i+1, len(person_positions)):
+                pos1 = person_positions[i]
+                pos2 = person_positions[j]
+                distance = math.sqrt((pos1[0] - pos2[0])**2 + (pos1[1] - pos2[1])**2)
+                max_distance_moved = max(max_distance_moved, distance)
+        
+        # If person moved less than 0.5m in the last 10 frames, consider them stationary
+        if max_distance_moved < 0.5:
+            print(f"Person stationary (max movement: {max_distance_moved:.3f}m < 0.5m), moving to person's front")
             self.move_to_person_front()
-            # Reset the movement timer to avoid repeated calls
-            self.last_movement_time = current_time
             return True
-        
-        return False
+        else:
+            return False
     
     def move_to_person_front(self):
         """Calculate and move to a position in front of the person"""
-        if self.current_person_position is None or self.odom_base is None:
+        if self.odom_base is None or len(self.local_frames) == 0:
             print("Cannot move to person front - missing position data")
             return
         
-        # Get person's position
-        person_x = self.current_person_position['x']
-        person_y = self.current_person_position['y']
-        
+        # Get the most recent frame with person data
+        last_frame = self.local_frames[-1]
+        if len(last_frame['coordinates']) == 0:
+            print("Cannot move to person front - no person in last frame")
+            return
+            
+        # Get person's position from the most recent frame
+        person_coords = last_frame['coordinates'][0]
+        person_x = person_coords['x']
+        person_y = person_coords['y']
+
         # Get robot's current position
         robot_x = self.odom_base.pose.pose.position.x
         robot_y = self.odom_base.pose.pose.position.y
@@ -171,25 +178,25 @@ class RealTimeDataCollector:
             direction_x /= direction_magnitude
             direction_y /= direction_magnitude
         
-        # Calculate target position 0.5 meters in front of the person
+        # Calculate target position 1 meter in front of the person
         # (in the direction where the robot currently is)
-        front_distance = 0.5  # meters
+        front_distance = 1  # meters
         target_x = person_x + direction_x * front_distance
         target_y = person_y + direction_y * front_distance
         
         print(f"Moving to person's front: Person at ({person_x:.3f}, {person_y:.3f}), Target: ({target_x:.3f}, {target_y:.3f})")
         
         # Use last known orientation if available, otherwise face the person
-        orientation = self.last_orientation if self.last_orientation else self.calculate_orientation_to_person(target_x, target_y, person_x, person_y)
+        orientation = self.calculate_orientation_to_person(target_x, target_y, person_x, person_y)
         
         # Move to the calculated position
         self.move_or_stop(target_x, target_y, 1, orientation)
-    
-    def calculate_orientation_to_person(self, robot_x, robot_y, person_x, person_y):
+
+    def calculate_orientation_to_person(self, target_x, target_y, person_x, person_y):
         """Calculate orientation for robot to face the person"""
         # Calculate angle from robot to person
-        angle = math.atan2(person_y - robot_y, person_x - robot_x)
-        
+        angle = math.atan2(person_y - target_y, person_x - target_x)
+
         # Convert angle to quaternion (rotation around z-axis)
         # Quaternion for rotation around z-axis: q = [0, 0, sin(θ/2), cos(θ/2)]
         half_angle = angle / 2.0
@@ -443,7 +450,6 @@ class RealTimeDataCollector:
                 'y': pose.position.y,
                 'z': pose.position.z
             }
-            self.current_person_position = self.translation_tf(coords)
             orientation = {
                 'x': pose.orientation.x,
                 'y': pose.orientation.y,
@@ -460,7 +466,6 @@ class RealTimeDataCollector:
         
         # Only add frame if it has at least one pose
         if local_frame['coordinates'] and local_frame['orientation']:
-            self.last_orientation = local_frame['orientation'][0]
             self.local_frames.append(local_frame)
 
     def move_or_stop(self, x, y, flag, orientation):
