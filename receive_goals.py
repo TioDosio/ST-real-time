@@ -77,7 +77,7 @@ class AdaptiveRobotNavigator:
         except Exception as e:
             rospy.logerr("Error sending goal: {}".format(e))
     
-    def goal_done_callback(self, status):
+    def goal_done_callback(self, status, result):
         """
         Callback when goal is completed (success, failure, or cancelled).
         """
@@ -91,7 +91,7 @@ class AdaptiveRobotNavigator:
         else:
             rospy.logwarn("Navigation goal finished with status: {}".format(status))
     
-    def check_goal_status(self):
+    def check_goal_status(self, event):
         """
         Check the current status of the goal after sending it.
         """
