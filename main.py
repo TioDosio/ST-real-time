@@ -6,6 +6,7 @@ import math
 import traceback
 from geometry_msgs.msg import PoseArray, Pose
 from nav_msgs.msg import Odometry
+from tf2_msgs.msg import TFMessage
 from view_predictions import TrajectoryEvaluator
 from evaluate_jta import load_model_and_config, evaluate_real_time_data
 from utils.utils import create_logger
@@ -14,14 +15,14 @@ class RealTimeDataCollector:
     def __init__(self, checkpoint_path="realeases/jta/checkpoint/checkpoint.pth.tar"):
         self.local_frames = []
         self.odom_base = None
+        self.odom_base_tf = None
         self.seq_len = 10
         self.interval = 5  # detection frequency is 5Hz, so interval of 5 means 1 second
         self.debug = False
         self.last_predictions = []
 
         # Movement tracking variables
-        self.last_robot_position = None
-        self.stationary_threshold = 0.  5  # seconds - how long to wait before going to persons
+        self.stationary_threshold = 0.5  # seconds - how long to wait before going to persons
         self.movement_threshold = 0.5    # meters - minimum movement to consider as "moving"
 
         # Set random seeds for reproducibility
@@ -45,18 +46,24 @@ class RealTimeDataCollector:
 
         # Subscribers
         self.image_detections_sub = rospy.Subscriber('/raw_bodies', PoseArray, self.image_detections_callback)
-        self.tf_sub = rospy.Subscriber('/odom', Odometry, self.tf_callback)
+        self.odom_sub = rospy.Subscriber('/odom', Odometry, self.odom_callback)
+        self.tf_sub = rospy.Subscriber('/tf', TFMessage, self.tf_callback)
 
         # Publisher for goal pose
         self.goal_pose_pub = rospy.Publisher('/goal_pose', PoseArray, queue_size=10)
 
     def tf_callback(self, msg):
-        """Extract robot transform from Odometry message"""
-        if msg.child_frame_id == "base_footprint":
-            # Save the robot's current position
-            self.last_robot_position = (msg.pose.pose.position.x, msg.pose.pose.position.y)
-            self.odom_base = msg
-            #print(f"[DEBUG] Robot odometry updated - Position: x={msg.pose.pose.position.x:.3f}, y={msg.pose.pose.position.y:.3f}")
+        """Extract robot transform from TF message"""
+        # TFMessage contains an array of transforms
+        for transform in msg.transforms:
+            if transform.child_frame_id == "base_footprint" and transform.header.frame_id == "odom":
+                self.odom_base_tf = transform
+                break
+
+    def odom_callback(self, msg):
+        """ Save the robot's current position """
+        self.odom_base = msg
+        #print(f"[DEBUG] Robot odometry updated - Position: x={msg.pose.pose.position.x:.3f}, y={msg.pose.pose.position.y:.3f}")
 
     def image_detections_callback(self, msg):
         #print(f"[DEBUG] Image detections callback received with {len(msg.poses)} poses")
@@ -291,13 +298,13 @@ class RealTimeDataCollector:
             return orientation
             
         try:
-            # Get robot's orientation quaternion from odometry
-            robot_pose = self.odom_base.pose.pose
-            robot_qx = robot_pose.orientation.x
-            robot_qy = robot_pose.orientation.y
-            robot_qz = robot_pose.orientation.z
-            robot_qw = robot_pose.orientation.w
-            
+            # Get robot's orientation quaternion from TF
+            robot_pose = self.odom_base_tf.transform.rotation
+            robot_qx = robot_pose.x
+            robot_qy = robot_pose.y
+            robot_qz = robot_pose.z
+            robot_qw = robot_pose.w
+
             # Quaternion multiplication to combine orientations: q_result = q_robot * q_local
             q1_w, q1_x, q1_y, q1_z = robot_qw, robot_qx, robot_qy, robot_qz  # robot orientation
             q2_w, q2_x, q2_y, q2_z = orientation['w'], orientation['x'], orientation['y'], orientation['z']  # local orientation
@@ -324,16 +331,16 @@ class RealTimeDataCollector:
 
 
     def translation_tf(self, coords):
-        if self.odom_base is None:
+        if self.odom_base_tf is None:
             print("No robot TF available for translation")
             return coords
         
         try:
-            # Get robot position from odometry (base_footprint to odom)
-            robot_pose = self.odom_base.pose.pose
-            robot_x = robot_pose.position.x
-            robot_y = robot_pose.position.y
-            robot_z = robot_pose.position.z
+            # Get robot position from TF (base_footprint to odom)
+            robot_pose = self.odom_base_tf.transform.translation
+            robot_x = robot_pose.x
+            robot_y = robot_pose.y
+            robot_z = robot_pose.z
             
             # Create a copy to avoid modifying the original
             transformed_coords = coords.copy()
